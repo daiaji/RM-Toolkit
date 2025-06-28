@@ -4,7 +4,7 @@
 require "yaml"
 require "pathname"
 require_relative "logging"
-# 不直接 require application 以避免循环依赖
+# <-- 修正：彻底移除对 application 的依赖
 
 class Configuration
   DEFAULT_CONFIG_FILENAME = "config.yaml".freeze
@@ -119,19 +119,13 @@ class Configuration
   # 验证合并后的配置数据是否有效
   # @raise [RuntimeError] 如果验证失败
   def validate_config
-    # 延迟加载 Application 常量以避免循环依赖
-    unless defined?(Application::RGSS_VERSIONS)
-      begin
-        require_relative "application" unless defined?(Application) # 只有未定义时才加载
-      rescue LoadError
-        raise "无法加载 Application 类来验证 RGSS 版本。"
-      end
-    end
+    # <-- 修正：移除对 application 的依赖，直接在这里定义验证所需的常量
+    valid_rgss_versions = %w[RGSS1 RGSS2 RGSS3 MV MZ].freeze
 
     # --- 验证 RGSS 版本 ---
     rgss_version = @data["rgss_version"]
-    unless rgss_version.is_a?(String) && Application::RGSS_VERSIONS.include?(rgss_version)
-      raise "配置错误: 'rgss_version' 必须是 #{Application::RGSS_VERSIONS.join(" 或 ")} 之一 (当前值: #{rgss_version.inspect})"
+    unless rgss_version.is_a?(String) && valid_rgss_versions.include?(rgss_version)
+      raise "配置错误: 'rgss_version' 必须是 #{valid_rgss_versions.join(" 或 ")} 之一 (当前值: #{rgss_version.inspect})"
     end
 
     # --- 验证目录路径 ---
@@ -157,7 +151,10 @@ class Configuration
 
     filenames_hash = archive_config["archive_filenames"]
     raise "配置错误: 'archive_processing.archive_filenames' 必须是一个哈希" unless filenames_hash.is_a?(Hash)
-    Application::RGSS_VERSIONS.each do |version|
+    
+    # <-- 修正：使用本地的 valid_rgss_versions 列表进行验证
+    # 我们只验证 RGSS1/2/3 的存档名配置，因为 MV/MZ 不使用此项
+    %w[RGSS1 RGSS2 RGSS3].each do |version|
       filename = filenames_hash[version]
       unless filename.is_a?(String) && !filename.empty?
         raise "配置错误: 'archive_processing.archive_filenames' 中缺少或无效的版本 '#{version}' 条目 (值: #{filename.inspect})"
@@ -174,14 +171,7 @@ class Configuration
     raise "配置错误: 'logging' 部分必须是一个哈希" unless log_config.is_a?(Hash)
 
     log_level = log_config["log_level"]
-    # 延迟加载 Logging 常量
-    unless defined?(Logging::VALID_LOG_LEVELS)
-      begin
-        require_relative "logging" unless defined?(Logging) # 只有未定义时才加载
-      rescue LoadError
-        raise "无法加载 Logging 模块来验证日志级别。"
-      end
-    end
+    # 依赖 logging.rb，这是允许的，因为它不造成循环
     unless log_level.nil? || (log_level.is_a?(String) && Logging::VALID_LOG_LEVELS.include?(log_level.upcase))
       raise "配置错误: 'logging.log_level' 必须是字符串且为 #{Logging::VALID_LOG_LEVELS.join(", ")} 之一 (当前: #{log_level.inspect})"
     end
