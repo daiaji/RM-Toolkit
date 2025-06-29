@@ -2,11 +2,13 @@
 require 'find'
 require_relative 'converter'
 require_relative 'utils'
+require_relative 'snapshot_manager' # 需要引入
 
 class RgssHandler
   SCRIPTS_BASENAME = "scripts".freeze
 
   module ProjectGenerator
+    # ... (此模块内容不变)
     RGSS_PROJECTS = {
       "RGSS1" => {
         file: "Game.rxproj",
@@ -61,11 +63,20 @@ class RgssHandler
     Logging::Log.info "使用 RGSS 处理器处理版本: #{@version}"
     validate_operation
     setup_directories
+    
     process_archive_extraction_if_needed
     process_project_reconstruction
     parse_config_patterns
     load_rgss_module
-    process_files
+    
+    files_processed = process_files
+    
+    # --- 修改：在解包成功后触发自动快照 ---
+    if @options[:unpack] && files_processed > 0
+      handle_auto_snapshot("rgss_unpack", "unpacked")
+    end
+    # ------------------------------------
+
     Logging::Log.info "RGSS 任务完成。"
   end
   
@@ -79,10 +90,18 @@ class RgssHandler
   end
   
   def setup_directories
-    input_dir_key = @options[:unpack] ? "input_dir_marshal" : "input_dir_source"
-    output_dir_key = @options[:unpack] ? "output_dir_source" : "output_dir_marshal"
-    @input_dir = File.expand_path(@config[input_dir_key], @base_dir)
-    @output_dir = File.expand_path(@config[output_dir_key], @base_dir)
+    structure_config = @config["project_structure"]
+    game_data_dir_name = structure_config["game_data_dir"]
+    source_data_dir_name = structure_config["source_data_dir"]
+
+    if @options[:unpack]
+      @input_dir = File.expand_path(game_data_dir_name, @base_dir)
+      @output_dir = File.expand_path(source_data_dir_name, @base_dir)
+    elsif @options[:pack]
+      @input_dir = File.expand_path(source_data_dir_name, @base_dir)
+      @output_dir = File.expand_path(game_data_dir_name, @base_dir)
+    end
+    
     Logging::Log.info "RGSS 输入目录: #{@input_dir}"
     Logging::Log.info "RGSS 输出目录: #{@output_dir}"
   end
@@ -98,7 +117,6 @@ class RgssHandler
     archive_path = File.join(@base_dir, archive_filename)
     return Logging::Log.info("未找到预期的存档文件 '#{archive_path}'，将直接处理输入目录 '#{@input_dir}'。") unless File.exist?(archive_path)
 
-    # --- FINAL FIX: Extract to @base_dir, NOT @input_dir ---
     Logging::Log.info "找到存档文件 '#{archive_filename}'，开始提取到基准目录 '#{@base_dir}'..."
     
     begin
@@ -131,8 +149,10 @@ class RgssHandler
     require_relative @version.downcase
   end
 
+  # 返回处理的文件数
   def process_files
     file_list, input_ext, output_ext = get_file_list
+    processed_count = 0
 
     if @options[:pack]
       pack_scripts(output_ext)
@@ -140,14 +160,18 @@ class RgssHandler
       file_list.reject! { |f| f.downcase.start_with?(scripts_source_path_prefix) }
     end
     
-    return Logging::Log.info "未找到匹配文件进行处理。" if file_list.empty?
+    return 0 if file_list.empty?
 
     exporter = @options[:unpack] ? Converter::JsonExporter.new(@version) : nil
     restorer = @options[:pack] ? Converter::RvdataRestorer.new(@version) : nil
 
     file_list.each do |input_file|
-      process_single_file(input_file, input_ext, output_ext, exporter, restorer)
+      if process_single_file(input_file, input_ext, output_ext, exporter, restorer)
+        processed_count += 1
+      end
     end
+    
+    processed_count
   end
   
   def get_file_list
@@ -157,12 +181,8 @@ class RgssHandler
     input_ext = @options[:unpack] ? rvdata_ext : source_ext
     output_ext = @options[:unpack] ? source_ext : rvdata_ext
 
-    unless Dir.exist?(@input_dir)
-      Logging::Log.warn "输入目录 '#{@input_dir}' 不存在，无法搜索文件。"
-      return [], input_ext, output_ext
-    end
+    return [], input_ext, output_ext unless Dir.exist?(@input_dir)
 
-    Logging::Log.info "在目录 '#{@input_dir}' 中搜索 *#{input_ext} 文件..."
     all_files = Find.find(@input_dir).select { |p| File.file?(p) && File.extname(p).downcase == input_ext.downcase }
 
     filtered = all_files.select do |f|
@@ -177,7 +197,7 @@ class RgssHandler
       end
     end.uniq.sort
     
-    Logging::Log.info "找到 #{filtered.size} 个匹配文件。"
+    Logging::Log.info "在 '#{@input_dir}' 中找到 #{filtered.size} 个匹配文件。"
     return filtered, input_ext, output_ext
   end
 
@@ -186,7 +206,7 @@ class RgssHandler
     return unless Dir.exist?(scripts_source_dir)
     
     output_file = File.join(@output_dir, SCRIPTS_BASENAME.capitalize + output_ext)
-    Logging::Log.info "检测到脚本源目录，打包: #{scripts_source_dir} -> #{File.basename(output_file)}"
+    Logging::Log.info "打包脚本: #{scripts_source_dir} -> #{File.basename(output_file)}"
     packed_array = Converter::Scripts.pack(scripts_source_dir)
     Converter::IO.write_marshal_data(output_file, packed_array)
   rescue => e
@@ -194,6 +214,7 @@ class RgssHandler
     raise if @options[:strict]
   end
 
+  # 返回 true 表示成功，false 表示失败
   def process_single_file(input_file, input_ext, output_ext, exporter, restorer)
     log_basename = File.basename(input_file)
     begin
@@ -202,25 +223,43 @@ class RgssHandler
       
       if @options[:unpack]
         if File.basename(input_file, ".*").downcase == SCRIPTS_BASENAME
-          Logging::Log.info "解包 #{log_basename} -> 脚本文件..."
+          Logging::Log.info "解包脚本: #{log_basename}"
           input_obj = Converter::IO.load_marshal_data(input_file)
           scripts_output_dir = File.join(@output_dir, SCRIPTS_BASENAME)
           Converter::Scripts.unpack(input_obj, scripts_output_dir)
         else
-          Logging::Log.info "解包 #{log_basename} -> JSON..."
+          Logging::Log.info "解包文件: #{log_basename}"
           input_obj = Converter::IO.load_marshal_data(input_file)
           cleaned_data = exporter.export(input_obj)
           Converter::IO.write_json_data(output_file, cleaned_data)
         end
       else # pack
-        Logging::Log.info "封包 #{log_basename} -> RVData/RXData..."
+        Logging::Log.info "封包文件: #{log_basename}"
         input_data = Converter::IO.load_json_data(input_file)
         restored_obj = restorer.restore(input_data)
         Converter::IO.write_marshal_data(output_file, restored_obj)
       end
+      true
     rescue => e
       Logging::Log.error "处理文件 #{log_basename} 失败: #{e.class}: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
       raise if @options[:strict]
+      false
+    end
+  end
+
+  # --- 新增：自动快照处理函数 ---
+  def handle_auto_snapshot(config_key, snapshot_auto_name)
+    snapshot_config = @config["snapshot_options"]
+    config_key_full = "auto_snapshot_after_#{config_key}"
+    return unless snapshot_config[config_key_full]
+
+    Logging::Log.info "配置已启用，将在操作后自动创建快照..."
+    begin
+      manager = SnapshotManager.new(@base_dir, @config)
+      manager.create(nil, auto_name: snapshot_auto_name)
+    rescue => e
+      Logging::Log.error "自动创建快照失败: #{e.message}"
+      # 这里不中止程序，因为核心操作已完成
     end
   end
 end

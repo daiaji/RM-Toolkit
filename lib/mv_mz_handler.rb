@@ -3,18 +3,16 @@ require 'json'
 require 'find'
 require 'fileutils'
 require 'pathname'
+require_relative 'snapshot_manager' # 需要引入
 
 class MvMzHandler
-  # --- 内部模块：项目重建器 (采用“白名单 + 智能复制”策略) ---
   module ProjectReconstructor
+    # ... (此模块内容不变)
     MV_PROJECT_CONTENT = "RPGMV 1.6.3"
     MZ_PROJECT_CONTENT = "RPGMZ 1.8.0"
     
-    # 基础白名单
-    BASE_DIRECTORIES_WHITELIST = %w[audio css data effects fonts icon img js movies].freeze
     BASE_FILES_WHITELIST = %w[index.html package.json].freeze
 
-    # 智能重建的核心方法，现在接收一个动态的白名单
     def self.reconstruct(data_dir, output_dir, version, overwrite, dynamic_whitelist)
       Logging::Log.info "开始为 RPG Maker #{version} 执行白名单智能重建到: #{output_dir}"
       Logging::Log.info "动态白名单: #{dynamic_whitelist.inspect}"
@@ -28,7 +26,6 @@ class MvMzHandler
       end
       FileUtils.mkdir_p(output_dir)
 
-      # 1. 复制动态白名单中的顶级目录
       dynamic_whitelist.each do |dir_name|
         src_dir = File.join(data_dir, dir_name)
         dest_dir = File.join(output_dir, dir_name)
@@ -41,7 +38,6 @@ class MvMzHandler
         end
       end
       
-      # 2. 复制固定的顶级文件白名单
       BASE_FILES_WHITELIST.each do |file_name|
         src_file = File.join(data_dir, file_name)
         dest_file = File.join(output_dir, file_name)
@@ -51,7 +47,6 @@ class MvMzHandler
         end
       end
 
-      # 3. 创建项目文件
       project_file, content = (version == "MV") ? ["Game.rpgproject", MV_PROJECT_CONTENT] : ["game.rmmzproject", MZ_PROJECT_CONTENT]
       project_path = File.join(output_dir, project_file)
       File.write(project_path, content)
@@ -61,7 +56,6 @@ class MvMzHandler
 
     private
 
-    # 递归地、有选择性地复制目录内容
     def self.copy_directory_selectively(source_dir, dest_dir, extensions_to_skip)
       FileUtils.mkdir_p(dest_dir)
 
@@ -82,7 +76,6 @@ class MvMzHandler
     end
   end
 
-  # --- 常量定义 ---
   MV_FILE_EXTENSIONS = { ".rpgmvo" => ".ogg", ".rpgmvp" => ".png", ".rpgmvm" => ".m4a" }
   MZ_FILE_EXTENSIONS = { ".ogg_" => ".ogg", ".png_" => ".png", ".m4a_" => ".m4a" }
   MACOS_BUNDLE_PATH = File.join("Contents", "Resources", "app.nw")
@@ -90,15 +83,20 @@ class MvMzHandler
   def initialize(options, config, version)
     @options, @config, @version = options, config, version
     @base_dir = @options[:base_dir]
-    # 在这里合并基础白名单和用户自定义白名单
-    @dynamic_dir_whitelist = (ProjectReconstructor::BASE_DIRECTORIES_WHITELIST + @options[:include_dirs]).uniq
+    
+    structure_config = @config["project_structure"]
+    config_whitelist = structure_config["mv_mz_asset_dirs"]
+    
+    @dynamic_dir_whitelist = (config_whitelist + @options[:include_dirs]).uniq
   end
 
-  # --- 主处理流程 ---
   def process
     validate_operation
     data_dir = find_data_directory
-    output_dir = File.expand_path(@config["output_dir_source"], @base_dir)
+    
+    output_dir_name = @config["project_structure"]["source_data_dir"]
+    output_dir = File.expand_path(output_dir_name, @base_dir)
+
     key = find_encryption_key(data_dir)
 
     if key.nil?
@@ -108,9 +106,12 @@ class MvMzHandler
     end
 
     if @options[:reconstruct]
-      # 将动态白名单传递给重建器
       ProjectReconstructor.reconstruct(data_dir, output_dir, @version, @options[:overwrite], @dynamic_dir_whitelist)
       update_system_json_encryption_flags(output_dir)
+      
+      # --- 修改：在重建成功后触发自动快照 ---
+      handle_auto_snapshot("mv_mz_reconstruct", "reconstructed")
+      # ------------------------------------
     end
 
     if key != :no_encryption
@@ -166,10 +167,7 @@ class MvMzHandler
   def update_system_json_encryption_flags(project_dir)
     system_json_path = File.join(project_dir, "data", "System.json")
     
-    unless File.exist?(system_json_path)
-      Logging::Log.warn "警告: 在重建的项目目录中找不到 System.json，无法更新加密标志。"
-      return
-    end
+    return Logging::Log.warn("警告: 在重建的项目目录中找不到 System.json，无法更新加密标志。") unless File.exist?(system_json_path)
     
     begin
       require 'oj' unless defined?(Oj)
@@ -203,12 +201,10 @@ class MvMzHandler
     end
   end
 
-  # 核心解密函数，现在也使用动态白名单
   def decrypt_all_files(source_dir, output_root_dir, key)
     extension_map = (@version == "MV") ? MV_FILE_EXTENSIONS : MZ_FILE_EXTENSIONS
     Logging::Log.info "开始在 '#{source_dir}' 的白名单目录中扫描加密文件，解密到 '#{output_root_dir}'..."
 
-    # 使用 @dynamic_dir_whitelist 进行遍历
     @dynamic_dir_whitelist.each do |dir_name|
       scan_dir = File.join(source_dir, dir_name)
       next unless Dir.exist?(scan_dir)
@@ -223,21 +219,34 @@ class MvMzHandler
         new_ext = extension_map[ext]
         output_file_path = File.join(output_root_dir, relative_path.sub(/#{Regexp.escape(ext)}$/, new_ext))
 
-        if File.exist?(output_file_path) && !@options[:overwrite]
-          Logging::Log.warn "  跳过: 输出文件 #{File.basename(output_file_path)} 已存在。使用 --overwrite。"
-          next
-        end
+        next if File.exist?(output_file_path) && !@options[:overwrite]
         
         FileUtils.mkdir_p(File.dirname(output_file_path))
-        Logging::Log.info "  解密: #{relative_path}"
+        Logging::Log.info "解密: #{relative_path}"
         
         begin
           RpgMakerTools.decrypt_mv_mz(path, output_file_path, key)
         rescue => e
-          Logging::Log.error "    解密文件失败: #{e.message}"
+          Logging::Log.error "解密文件失败: #{e.message}"
           raise if @options[:strict]
         end
       end
+    end
+  end
+
+  # --- 新增：自动快照处理函数 ---
+  def handle_auto_snapshot(config_key, snapshot_auto_name)
+    snapshot_config = @config["snapshot_options"]
+    config_key_full = "auto_snapshot_after_#{config_key}"
+    return unless snapshot_config[config_key_full]
+
+    Logging::Log.info "配置已启用，将在操作后自动创建快照..."
+    begin
+      manager = SnapshotManager.new(@base_dir, @config)
+      manager.create(nil, auto_name: snapshot_auto_name)
+    rescue => e
+      Logging::Log.error "自动创建快照失败: #{e.message}"
+      # 这里不中止程序，因为核心操作已完成
     end
   end
 end

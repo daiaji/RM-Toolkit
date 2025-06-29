@@ -4,33 +4,43 @@
 # 可选值: "RGSS1", "RGSS2", "RGSS3", "MV", "MZ"
 rgss_version: "MZ"
 
-# 输入文件夹路径 (相对于基准目录 --base-dir)
-input_dir_marshal: "Data" # 存放原始 .rxdata/.rvdata/.rvdata2 文件的目录
-input_dir_source: "Source"    # 存放 .json 文件和 Scripts 目录的目录 (打包模式输入)
+# --- 项目结构定义 ---
+project_structure:
+  game_data_dir: "Data"
+  source_data_dir: "Source"
+  mv_mz_asset_dirs:
+    - audio
+    - css
+    - data
+    - effects
+    - fonts
+    - icon
+    - img
+    - js
+    - movies
 
-# 输出文件夹路径 (相对于基准目录 --base-dir)
-output_dir_source: "Source"    # 输出 .json 和解密/重建文件的目录
-output_dir_marshal: "Data"     # 输出 .rxdata/.rvdata/.rvdata2 文件的目录 (打包模式输出)
-
-# --- 存档文件处理设置 (仅适用于 RGSS1, RGSS2, RGSS3) ---
+# --- 存档文件处理设置 ---
 archive_processing:
-  # 是否启用存档提取功能 (true/false)。
-  # 在 --unpack 模式下，如果为 true 且 C 扩展可用，将尝试提取基准目录下的存档文件。
   enabled: true
-
-  # 各版本对应的加密存档文件名。
   archive_filenames:
     RGSS1: "Game.rgssad"
     RGSS2: "Game.rgss2a"
     RGSS3: "Game.rgss3a"
-
-  # 是否在成功提取后删除原始存档文件 (true/false)。
-  # 注意: 仅在 'unpack' 模式下且 enabled 为 true 时生效。
-  # 在独立提取模式 (--extract-archive) 下，此选项总是被视为 false。
   delete_archive_after_extraction: false
-# --------------------------------------------------------
 
-# 要处理的文件基础名列表 (作为不区分大小写的 Ruby 正则表达式处理)
+# --- 快照选项 ---
+snapshot_options:
+  directory: ".snapshots"
+  format: "{dirname}_snapshot_{name}_{timestamp}"
+
+  # --- 新增：自动快照配置 ---
+  # 在 RGSS 解包 (--unpack) 成功后自动创建初始快照
+  auto_snapshot_after_rgss_unpack: true
+  # 在 MV/MZ 项目重建 (--reconstruct) 成功后自动创建初始快照
+  auto_snapshot_after_mv_mz_reconstruct: true
+  # -------------------------
+
+# 要处理的文件基础名列表
 files:
   - Actors
   - Animations
@@ -40,22 +50,22 @@ files:
   - Enemies
   - Items
   - MapInfos
-  - Scripts # <-- 触发特殊处理 (解包/打包)
+  - Scripts
   - Skills
   - States
   - System
   - Tilesets
   - Troops
   - Weapons
-  - Map\d{3} # 匹配 Map001, Map002, ...
+  - Map\d{3}
 
 # 需要排除的文件基础名列表
 exclude_files:
-  - Areas # 仅 RGSS2, 通常不处理
+  - Areas
 
 # --- 日志配置 ---
 logging:
-  log_level: "INFO" # DEBUG, INFO, WARN, ERROR, FATAL
+  log_level: "INFO"
   log_to_file: true
   log_directory: "logs"
   log_filename_format: "rvdata2json_{timestamp}.log"

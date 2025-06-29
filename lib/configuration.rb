@@ -4,20 +4,21 @@
 require "yaml"
 require "pathname"
 require_relative "logging"
-# <-- 修正：彻底移除对 application 的依赖
 
 class Configuration
   DEFAULT_CONFIG_FILENAME = "config.yaml".freeze
 
   # 默认配置项
   DEFAULT_CONFIG = {
-    "rgss_version" => "RGSS3",
-    # --- 注意: 这些路径是相对于 --base-dir (基准目录) 的 ---
-    "input_dir_marshal" => "Data",
-    "input_dir_source" => "Source",
-    "output_dir_source" => "Source",
-    "output_dir_marshal" => "Data",
-    # ----------------------------------------------------
+    "rgss_version" => "MZ",
+    "project_structure" => {
+      "game_data_dir" => "Data",
+      "source_data_dir" => "Source",
+      "mv_mz_asset_dirs" => [
+        "audio", "css", "data", "effects", "fonts", 
+        "icon", "img", "js", "movies"
+      ],
+    },
     "files" => [
       "Actors", "Animations", "Armors", "Classes", "CommonEvents",
       "Enemies", "Items", "MapInfos", "Scripts", "Skills", "States", "System",
@@ -33,12 +34,17 @@ class Configuration
       },
       "delete_archive_after_extraction" => false,
     },
+    "snapshot_options" => {
+      "directory" => ".snapshots",
+      "format" => "{dirname}_snapshot_{name}_{timestamp}",
+      # --- 新增：自动快照默认配置 ---
+      "auto_snapshot_after_rgss_unpack" => true,
+      "auto_snapshot_after_mv_mz_reconstruct" => true,
+    },
     "logging" => {
       "log_level" => "INFO",
       "log_to_file" => false,
-      # --- 注意: log_directory 也是相对于 --base-dir (基准目录) 的 ---
       "log_directory" => "logs",
-      # ----------------------------------------------------------
       "log_filename_format" => "rvdata2json_{timestamp}.log",
       "enable_colors" => true,
     },
@@ -47,145 +53,76 @@ class Configuration
   attr_reader :path
   attr_reader :data
 
-  # 初始化 Configuration 对象
-  # @param config_path_arg [String, nil] 命令行指定的配置文件路径，或 nil 使用默认路径
   def initialize(config_path_arg = nil)
     if config_path_arg
-      # 如果指定了路径，根据是绝对路径还是相对路径进行处理
-      # 注意：这里的相对路径是相对于当前工作目录
       @path = File.absolute_path?(config_path_arg) ? config_path_arg : File.expand_path(config_path_arg, Dir.pwd)
     else
-      # 如果未指定路径，使用项目根目录下的默认文件名
-      project_root = File.expand_path("..", __dir__) # 获取 lib 目录的上级目录
+      project_root = File.expand_path("..", __dir__)
       @path = File.join(project_root, DEFAULT_CONFIG_FILENAME)
     end
-    @data = {} # 初始化为空哈希
+    @data = {}
   end
 
-  # 加载配置文件并与默认配置合并
-  # @return [Hash] 合并后的配置数据
-  # @raise [RuntimeError] 如果 YAML 文件语法错误或加载失败
-  # @raise [RuntimeError] 如果配置项验证失败
   def load
     loaded_data = {}
     if File.exist?(@path)
       begin
-        # 从 YAML 文件加载数据
-        loaded_data = YAML.load_file(@path) || {} # 如果文件为空，返回空哈希
+        loaded_data = YAML.load_file(@path) || {}
       rescue Psych::SyntaxError => e
-        # 处理 YAML 语法错误
         raise "配置文件 YAML 语法错误: #{e.message}"
       rescue => e
-        # 处理其他加载错误
         raise "加载配置文件 '#{@path}' 时出错: #{e.class}: #{e.message}"
       end
-    else
-      # 配置文件不存在的情况将在 Application 中记录日志，这里无需处理
     end
 
-    # 将加载的数据深度合并到默认配置上 (配置文件中的值覆盖默认值)
-    @data = deep_merge(DEFAULT_CONFIG.dup, loaded_data) # 使用 dup 避免修改 DEFAULT_CONFIG
-    validate_config # 验证合并后的配置
+    @data = deep_merge(DEFAULT_CONFIG.dup, loaded_data)
+    validate_config
     @data
   end
 
-  # 提供便捷的访问配置项的方法 (例: config["rgss_version"])
   def [](key)
     @data[key]
   end
 
   private
 
-  # 深度合并两个哈希
-  # @param hash1 [Hash] 基础哈希 (通常是默认配置)
-  # @param hash2 [Hash] 要合并进来的哈希 (通常是加载的配置)
-  # @return [Hash] 合并后的哈希 (hash1 会被修改)
   def deep_merge(hash1, hash2)
     hash2.each do |key, value|
       if hash1.key?(key) && hash1[key].is_a?(Hash) && value.is_a?(Hash)
-        # 如果键在两个哈希中都存在且值都是哈希，则递归合并
         deep_merge(hash1[key], value)
       elsif hash1.key?(key) && hash1[key].is_a?(Array) && value.is_a?(Array)
-        # 如果键在两个哈希中都存在且值都是数组，则使用 hash2 的数组覆盖 hash1 的数组
         hash1[key] = value
       else
-        # 其他情况，直接用 hash2 的值覆盖 hash1 的值
         hash1[key] = value
       end
     end
     hash1
   end
 
-  # 验证合并后的配置数据是否有效
-  # @raise [RuntimeError] 如果验证失败
   def validate_config
-    # <-- 修正：移除对 application 的依赖，直接在这里定义验证所需的常量
     valid_rgss_versions = %w[RGSS1 RGSS2 RGSS3 MV MZ].freeze
-
-    # --- 验证 RGSS 版本 ---
-    rgss_version = @data["rgss_version"]
-    unless rgss_version.is_a?(String) && valid_rgss_versions.include?(rgss_version)
-      raise "配置错误: 'rgss_version' 必须是 #{valid_rgss_versions.join(" 或 ")} 之一 (当前值: #{rgss_version.inspect})"
+    raise "配置错误: 'rgss_version' 必须是 #{valid_rgss_versions.join(" 或 ")} 之一" unless valid_rgss_versions.include?(@data["rgss_version"])
+    
+    proj_struct = @data["project_structure"] || {}
+    raise "配置错误: 'project_structure' 部分必须是一个哈希" unless proj_struct.is_a?(Hash)
+    %w[game_data_dir source_data_dir].each do |key|
+      raise "配置错误: 'project_structure.#{key}' 必须是字符串且非空" unless proj_struct[key].is_a?(String) && !proj_struct[key].empty?
     end
+    raise "配置错误: 'project_structure.mv_mz_asset_dirs' 必须是一个数组" unless proj_struct["mv_mz_asset_dirs"].is_a?(Array)
 
-    # --- 验证目录路径 ---
-    %w[input_dir_marshal input_dir_source output_dir_source output_dir_marshal].each do |key|
-      dir_path = @data[key]
-      unless dir_path.is_a?(String) && !dir_path.empty?
-        raise "配置错误: 缺少或无效的目录键 '#{key}' (值: #{dir_path.inspect})"
-      end
-    end
+    snapshot_config = @data["snapshot_options"] || {}
+    raise "配置错误: 'snapshot_options' 部分必须是一个哈希" unless snapshot_config.is_a?(Hash)
+    raise "配置错误: 'snapshot_options.directory' 必须是字符串" unless snapshot_config["directory"].is_a?(String)
+    raise "配置错误: 'snapshot_options.format' 必须是字符串" unless snapshot_config["format"].is_a?(String)
+    # --- 新增：自动快照配置验证 ---
+    raise "配置错误: 'snapshot_options.auto_snapshot_after_rgss_unpack' 必须是 true 或 false" unless [true, false].include?(snapshot_config["auto_snapshot_after_rgss_unpack"])
+    raise "配置错误: 'snapshot_options.auto_snapshot_after_mv_mz_reconstruct' 必须是 true 或 false" unless [true, false].include?(snapshot_config["auto_snapshot_after_mv_mz_reconstruct"])
 
-    # --- 验证文件列表 ---
-    files_list = @data["files"]
-    exclude_files_list = @data["exclude_files"]
-    raise "配置错误: 'files' 必须是一个数组" unless files_list.is_a?(Array)
-    raise "配置错误: 'exclude_files' 必须是一个数组" unless exclude_files_list.is_a?(Array)
-
-    # --- 验证存档处理配置 ---
+    raise "配置错误: 'files' 必须是一个数组" unless @data["files"].is_a?(Array)
+    raise "配置错误: 'exclude_files' 必须是一个数组" unless @data["exclude_files"].is_a?(Array)
     archive_config = @data["archive_processing"] || {}
     raise "配置错误: 'archive_processing' 部分必须是一个哈希" unless archive_config.is_a?(Hash)
-
-    enabled_flag = archive_config["enabled"]
-    raise "配置错误: 'archive_processing.enabled' 必须是 true 或 false (当前值: #{enabled_flag.inspect})" unless [true, false].include?(enabled_flag)
-
-    filenames_hash = archive_config["archive_filenames"]
-    raise "配置错误: 'archive_processing.archive_filenames' 必须是一个哈希" unless filenames_hash.is_a?(Hash)
-    
-    # <-- 修正：使用本地的 valid_rgss_versions 列表进行验证
-    # 我们只验证 RGSS1/2/3 的存档名配置，因为 MV/MZ 不使用此项
-    %w[RGSS1 RGSS2 RGSS3].each do |version|
-      filename = filenames_hash[version]
-      unless filename.is_a?(String) && !filename.empty?
-        raise "配置错误: 'archive_processing.archive_filenames' 中缺少或无效的版本 '#{version}' 条目 (值: #{filename.inspect})"
-      end
-    end
-
-    # --- 验证 delete_archive_after_extraction ---
-    delete_flag = archive_config["delete_archive_after_extraction"]
-    raise "配置错误: 'archive_processing.delete_archive_after_extraction' 必须是 true 或 false (当前值: #{delete_flag.inspect})" unless [true, false].include?(delete_flag)
-    # -----------------------------------------------
-
-    # --- 验证日志配置 ---
     log_config = @data["logging"] || {}
     raise "配置错误: 'logging' 部分必须是一个哈希" unless log_config.is_a?(Hash)
-
-    log_level = log_config["log_level"]
-    # 依赖 logging.rb，这是允许的，因为它不造成循环
-    unless log_level.nil? || (log_level.is_a?(String) && Logging::VALID_LOG_LEVELS.include?(log_level.upcase))
-      raise "配置错误: 'logging.log_level' 必须是字符串且为 #{Logging::VALID_LOG_LEVELS.join(", ")} 之一 (当前: #{log_level.inspect})"
-    end
-
-    log_to_file = log_config["log_to_file"]
-    raise "配置错误: 'logging.log_to_file' 必须是 true 或 false (当前: #{log_to_file.inspect})" unless [true, false].include?(log_to_file)
-
-    log_directory = log_config["log_directory"]
-    raise "配置错误: 'logging.log_directory' 必须是一个字符串 (当前: #{log_directory.inspect})" unless log_directory.is_a?(String)
-
-    log_filename_format = log_config["log_filename_format"]
-    raise "配置错误: 'logging.log_filename_format' 必须是一个字符串 (当前: #{log_filename_format.inspect})" unless log_filename_format.is_a?(String)
-
-    enable_colors = log_config["enable_colors"]
-    raise "配置错误: 'logging.enable_colors' 必须是 true 或 false (当前: #{enable_colors.inspect})" unless [true, false].include?(enable_colors)
   end
 end

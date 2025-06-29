@@ -1,11 +1,10 @@
-# lib/application.rb
+# rvdata2json/lib/application.rb
 require 'optparse'
 require 'pathname'
 require 'fileutils'
 
 # 提前加载，确保 C 扩展路径设置正确
 lib_path = File.expand_path(__dir__)
-# extconf.rb 指定了 'rpg_maker_tools/rpg_maker_tools'，所以需要 'ext' 目录在路径中
 ext_path = File.expand_path(File.join(__dir__, '..', 'ext'))
 $LOAD_PATH.unshift(lib_path) unless $LOAD_PATH.include?(lib_path)
 $LOAD_PATH.unshift(ext_path) unless $LOAD_PATH.include?(ext_path)
@@ -23,6 +22,7 @@ require_relative 'configuration'
 require_relative 'version_detector'
 require_relative 'rgss_handler'
 require_relative 'mv_mz_handler'
+require_relative 'snapshot_manager' # 引入新的快照管理器
 
 class Application
   RGSS_VERSIONS = %w[RGSS1 RGSS2 RGSS3 MV MZ].freeze
@@ -34,7 +34,11 @@ class Application
       config: nil, base_dir: nil, log_level: nil, log_dir: nil,
       unpack: false, pack: false, overwrite: false, reconstruct: false, strict: false,
       rgss_version: nil, extract_archive_path: nil, extract_output_path: nil,
-      include_dirs: [] # 新增：初始化为空数组
+      include_dirs: [],
+      # --- 快照相关选项 ---
+      snapshot_task: nil,       # :create, :list, :restore
+      snapshot_name: nil,       # 用于 create 和 restore 的名称
+      force_restore: false,     # 用于跳过恢复时的确认
     }
     @base_dir = nil
     @config = nil
@@ -46,7 +50,10 @@ class Application
     load_configuration
     Logging.setup_logger(@config, @base_dir, @options[:log_level], @options[:log_dir])
     
-    if @options[:extract_archive_path]
+    # --- 任务分派 ---
+    if @options[:snapshot_task]
+      handle_snapshot_task
+    elsif @options[:extract_archive_path]
       handle_standalone_extraction
     else
       handle_regular_processing
@@ -59,28 +66,44 @@ class Application
   end
 
   private
+
+  def handle_snapshot_task
+    manager = SnapshotManager.new(@base_dir, @config)
+    case @options[:snapshot_task]
+    when :create
+      manager.create(@options[:snapshot_name])
+    when :list
+      manager.list
+    when :restore
+      manager.restore(@options[:snapshot_name], @options[:force_restore])
+    end
+  end
   
   def handle_standalone_extraction
     raise "错误: 独立存档提取模式需要原生工具 C 扩展，但加载失败。" unless NATIVE_TOOLS_LOADED
     Logging::Log.info "进入独立存档提取模式..."
-    
     input_path = File.expand_path(@options[:extract_archive_path], @base_dir)
     output_path = @options[:extract_output_path] ? File.expand_path(@options[:extract_output_path]) : File.expand_path(DEFAULT_STANDALONE_EXTRACT_DIR, Dir.pwd)
-    
     FileUtils.mkdir_p(output_path)
     RpgMakerTools.extract_rgssad(input_path, output_path, Logging::Log.debug?)
     Logging::Log.info "存档已提取到: #{output_path}"
   end
   
   def handle_regular_processing
+    # 确定操作模式是否有效
+    unless @options[:unpack] || @options[:pack]
+      raise "错误: 必须指定一个主要操作模式，例如 --unpack, --pack, 或一个快照命令。"
+    end
+    
     detected_version = VersionDetector.detect(@base_dir)
     final_version = @options[:rgss_version] || detected_version || @config["rgss_version"]
-
+    
     unless RGSS_VERSIONS.include?(final_version)
       raise "无法确定有效的项目版本。请检查项目目录或使用 --rgssX/--mv/--mz 参数强制指定。"
     end
+    
     Logging::Log.info "最终决策的项目版本为: #{final_version}"
-
+    
     handler_class = case final_version
                     when "RGSS1", "RGSS2", "RGSS3" then RgssHandler
                     when "MV", "MZ" then MvMzHandler
@@ -93,24 +116,38 @@ class Application
   def parse_options
     OptionParser.new do |opts|
       opts.banner = "用法: rvdata2json.rb [选项]"
+      opts.separator ""
+      opts.separator "常规操作:"
       opts.on("-b", "--base-dir DIR", "指定基准目录 (默认: 当前目录)") { |d| @options[:base_dir] = d }
       opts.on("-u", "--unpack", "解包/解密模式") { @options[:unpack] = true }
       opts.on("-p", "--pack", "封包模式 (仅RGSS1/2/3)") { @options[:pack] = true }
       opts.on("-w", "--overwrite", "覆盖已存在的目标文件") { @options[:overwrite] = true }
       opts.on("--reconstruct", "重建项目结构 (解密前/解包后)") { @options[:reconstruct] = true }
-      
-      # 新增参数定义
-      opts.on("--include-dirs DIRS", String, "在重建/解密时额外包含的顶级目录 (用逗号分隔)",
-                                             "  例如: --include-dirs mods,extra_assets") do |dirs|
+      opts.on("--include-dirs DIRS", String, "在重建/解密时额外包含的顶级目录 (用逗号分隔)") do |dirs|
         @options[:include_dirs] = dirs.split(',').map(&:strip).reject(&:empty?)
       end
       
+      opts.separator ""
+      opts.separator "快照管理 (针对源码目录):"
+      opts.on("--create-snapshot [NAME]", "为源码目录创建快照，可指定可选名称") do |name|
+        @options[:snapshot_task] = :create
+        @options[:snapshot_name] = name
+      end
+      opts.on("--list-snapshots", "列出所有可用的快照") { @options[:snapshot_task] = :list }
+      opts.on("--restore-snapshot NAME", "从指定快照恢复源码目录") do |name|
+        @options[:snapshot_task] = :restore
+        @options[:snapshot_name] = name
+      end
+      opts.on("-f", "--force", "在恢复快照时跳过确认提示 (请谨慎使用)") { @options[:force_restore] = true }
+
+      opts.separator ""
+      opts.separator "其他选项:"
       opts.on("--strict", "启用严格模式，遇到第一个文件错误即中止") { @options[:strict] = true }
       opts.on("-e", "--extract-archive FILE", "独立提取RGSSAD存档并退出") { |f| @options[:extract_archive_path] = f }
       opts.on("-o", "--extract-output-dir DIR", "独立提取的输出目录") { |d| @options[:extract_output_path] = d }
       opts.on("--rgss1", "强制使用 RGSS1 (XP)") { @options[:rgss_version] = "RGSS1" }
       opts.on("--rgss2", "强制使用 RGSS2 (VX)") { @options[:rgss_version] = "RGSS2" }
-      opts.on("--rgss3", "强制使用 RGSS3 (VX Ace)") { @options[:rgss_version] = "RGSS3" }
+      opts.on("--rgss3", "强制使用 RGSS3 (VX Ace)") { @options::rgss_version = "RGSS3" }
       opts.on("--mv", "强制使用 RPG Maker MV") { @options[:rgss_version] = "MV" }
       opts.on("--mz", "强制使用 RPG Maker MZ") { @options[:rgss_version] = "MZ" }
       opts.on("--log-level LEVEL", "设置日志级别 (DEBUG, INFO, WARN, ERROR)") { |l| @options[:log_level] = l.upcase }
