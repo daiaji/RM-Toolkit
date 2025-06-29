@@ -1,3 +1,42 @@
+# ===============================================
+# C/C++ and Ruby Extension Compilation Artifacts
+# ===============================================
+
+# --- Build system files (usually in ext/) ---
+ext/**/Makefile
+ext/**/mkmf.log
+ext/**/conftest*
+
+# --- Development artifact variants ---
+ext/**/native.c_old
+ext/**/native.c_en
+ext/**/native.c_Fix
+ext/**/native.c_io_uring*
+ext/**/native.c_non_io_uring*
+
+# --- Compiled Object Files ---
+*.o
+*.obj
+
+# --- Compiled Shared Libraries / Binaries ---
+*.so
+*.bundle
+*.dylib
+*.dll
+
+# --- Temporary directories from gems/extensions ---
+ext/tmp/
+
+# --- Runtime artifacts ---
+logs/
+mkmf.log
+perf.data
+perf.data.old
+rm.log
+AVX
+AVX.c
+Makefile
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
@@ -21,21 +60,15 @@ $RECYCLE.BIN/
 # Operating System Files
 # =========================
 
-# OSX
-# =========================
-
 .DS_Store
 .AppleDouble
 .LSOverride
 
-# Thumbnails
 ._*
 
-# Files that might appear on external disk
 .Spotlight-V100
 .Trashes
 
-# Directories potentially created on remote AFP share
 .AppleDB
 .AppleDesktop
 Network Trash Folder
