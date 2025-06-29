@@ -1,4 +1,5 @@
 # lib/rgss_handler.rb
+require 'find'
 require_relative 'converter'
 require_relative 'utils'
 
@@ -7,23 +8,45 @@ class RgssHandler
 
   module ProjectGenerator
     RGSS_PROJECTS = {
-      "RGSS1" => { file: "Game.rxproj", content: "RPGXP 1.05" },
-      "RGSS2" => { file: "Game.rvproj", content: "RPGVX 1.02" },
-      "RGSS3" => { file: "Game.rvproj2", content: "RPGVXAce 1.02" },
+      "RGSS1" => {
+        file: "Game.rxproj",
+        content: "RPGXP 1.05",
+        ini_file: "Game.ini",
+        ini_content: "[Game]\r\nLibrary=RGSS104E.dll\r\nScripts=Data\\Scripts.rxdata\r\nTitle=DecryptedProject\r\nRTP1=Standard\r\nRTP2=\r\nRTP3="
+      },
+      "RGSS2" => {
+        file: "Game.rvproj",
+        content: "RPGVX 1.02",
+        ini_file: "Game.ini",
+        ini_content: "[Game]\r\nRTP=RPGVX\r\nLibrary=RGSS202E.dll\r\nScripts=Data\\Scripts.rvdata\r\nTitle=DecryptedProject"
+      },
+      "RGSS3" => {
+        file: "Game.rvproj2",
+        content: "RPGVXAce 1.02",
+        ini_file: "Game.ini",
+        ini_content: "[Game]\r\nRTP=RPGVXAce\r\nLibrary=System\\RGSS300.dll\r\nScripts=Data\\Scripts.rvdata2\r\nTitle=DecryptedProject"
+      },
     }.freeze
     
-    def self.generate(output_dir, version, overwrite)
+    def self.generate(base_dir, version, overwrite)
       config = RGSS_PROJECTS[version]
       return unless config
       
-      project_path = File.join(output_dir, config[:file])
+      project_path = File.join(base_dir, config[:file])
       if File.exist?(project_path) && !overwrite
-        Logging::Log.warn "项目文件 #{config[:file]} 已存在，跳过生成。使用 --overwrite 选项进行覆盖。"
-        return
+        Logging::Log.warn "项目文件 #{config[:file]} 已存在于基准目录，跳过生成。使用 --overwrite 选项进行覆盖。"
+      else
+        File.write(project_path, config[:content])
+        Logging::Log.info "成功在基准目录创建项目文件: #{project_path}"
       end
       
-      File.write(project_path, config[:content])
-      Logging::Log.info "成功创建项目文件: #{project_path}"
+      ini_path = File.join(base_dir, config[:ini_file])
+      if File.exist?(ini_path) && !overwrite
+        Logging::Log.warn "配置文件 #{config[:ini_file]} 已存在于基准目录，跳过生成。使用 --overwrite 选项进行覆盖。"
+      else
+        File.write(ini_path, config[:ini_content])
+        Logging::Log.info "成功在基准目录创建配置文件: #{ini_path}"
+      end
     end
   end
 
@@ -38,11 +61,10 @@ class RgssHandler
     Logging::Log.info "使用 RGSS 处理器处理版本: #{@version}"
     validate_operation
     setup_directories
-    process_archive_extraction
+    process_archive_extraction_if_needed
     process_project_reconstruction
     parse_config_patterns
     load_rgss_module
-    adjust_input_directory_for_unpack
     process_files
     Logging::Log.info "RGSS 任务完成。"
   end
@@ -61,11 +83,11 @@ class RgssHandler
     output_dir_key = @options[:unpack] ? "output_dir_source" : "output_dir_marshal"
     @input_dir = File.expand_path(@config[input_dir_key], @base_dir)
     @output_dir = File.expand_path(@config[output_dir_key], @base_dir)
-    Logging::Log.info "RGSS 输入目录 (初始): #{@input_dir}"
+    Logging::Log.info "RGSS 输入目录: #{@input_dir}"
     Logging::Log.info "RGSS 输出目录: #{@output_dir}"
   end
   
-  def process_archive_extraction
+  def process_archive_extraction_if_needed
     return unless @options[:unpack]
     archive_config = @config["archive_processing"]
     return unless archive_config["enabled"] && defined?(RpgMakerTools)
@@ -74,13 +96,13 @@ class RgssHandler
     return Logging::Log.warn("无法为版本 #{@version} 确定存档文件名，跳过提取。") unless archive_filename
 
     archive_path = File.join(@base_dir, archive_filename)
-    return Logging::Log.info("未找到预期的存档文件 '#{archive_path}'，跳过提取。") unless File.exist?(archive_path)
+    return Logging::Log.info("未找到预期的存档文件 '#{archive_path}'，将直接处理输入目录 '#{@input_dir}'。") unless File.exist?(archive_path)
 
+    # --- FINAL FIX: Extract to @base_dir, NOT @input_dir ---
     Logging::Log.info "找到存档文件 '#{archive_filename}'，开始提取到基准目录 '#{@base_dir}'..."
     
     begin
       RpgMakerTools.extract_rgssad(archive_path, @base_dir, Logging::Log.debug?)
-      @archive_extracted_successfully = true
       Logging::Log.info "存档提取成功。"
       
       if archive_config["delete_archive_after_extraction"]
@@ -96,8 +118,8 @@ class RgssHandler
 
   def process_project_reconstruction
     return unless @options[:reconstruct] && @options[:unpack]
-    Logging::Log.info "检测到 --reconstruct 选项，尝试为 #{@version} 生成项目文件..."
-    ProjectGenerator.generate(@output_dir, @version, @options[:overwrite])
+    Logging::Log.info "检测到 --reconstruct 选项，尝试为 #{@version} 在基准目录生成项目文件..."
+    ProjectGenerator.generate(@base_dir, @version, @options[:overwrite])
   end
 
   def parse_config_patterns
@@ -109,26 +131,13 @@ class RgssHandler
     require_relative @version.downcase
   end
 
-  def adjust_input_directory_for_unpack
-    return unless @options[:unpack]
-    return unless @config["archive_processing"]["enabled"]
-    
-    if @archive_extracted_successfully
-      Logging::Log.info "将使用基准目录 '#{@base_dir}' 作为存档提取后的输入源。"
-      @input_dir = @base_dir
-    else
-      Logging::Log.warn "存档提取未成功/未执行，将使用原始输入目录 '#{@input_dir}'。"
-      raise "错误: 存档提取失败/未执行，且原始输入目录 '#{@input_dir}' 也不存在。" unless Dir.exist?(@input_dir)
-    end
-  end
-
   def process_files
     file_list, input_ext, output_ext = get_file_list
 
     if @options[:pack]
       pack_scripts(output_ext)
-      scripts_rel_path = Pathname.new(File.join(@config["input_dir_source"], SCRIPTS_BASENAME)).relative_path_from(@base_dir).to_s.downcase
-      file_list.reject! { |f| Pathname.new(f).relative_path_from(@base_dir).to_s.downcase.start_with?(scripts_rel_path) }
+      scripts_source_path_prefix = File.join(@input_dir, SCRIPTS_BASENAME).downcase
+      file_list.reject! { |f| f.downcase.start_with?(scripts_source_path_prefix) }
     end
     
     return Logging::Log.info "未找到匹配文件进行处理。" if file_list.empty?
@@ -148,7 +157,12 @@ class RgssHandler
     input_ext = @options[:unpack] ? rvdata_ext : source_ext
     output_ext = @options[:unpack] ? source_ext : rvdata_ext
 
-    Logging::Log.info "在目录 #{@input_dir} 中搜索 *#{input_ext} 文件..."
+    unless Dir.exist?(@input_dir)
+      Logging::Log.warn "输入目录 '#{@input_dir}' 不存在，无法搜索文件。"
+      return [], input_ext, output_ext
+    end
+
+    Logging::Log.info "在目录 '#{@input_dir}' 中搜索 *#{input_ext} 文件..."
     all_files = Find.find(@input_dir).select { |p| File.file?(p) && File.extname(p).downcase == input_ext.downcase }
 
     filtered = all_files.select do |f|
@@ -168,7 +182,7 @@ class RgssHandler
   end
 
   def pack_scripts(output_ext)
-    scripts_source_dir = File.expand_path(File.join(@config["input_dir_source"], SCRIPTS_BASENAME), @base_dir)
+    scripts_source_dir = File.join(@input_dir, SCRIPTS_BASENAME)
     return unless Dir.exist?(scripts_source_dir)
     
     output_file = File.join(@output_dir, SCRIPTS_BASENAME.capitalize + output_ext)
@@ -183,8 +197,11 @@ class RgssHandler
   def process_single_file(input_file, input_ext, output_ext, exporter, restorer)
     log_basename = File.basename(input_file)
     begin
+      rel_path = Pathname.new(input_file).relative_path_from(@input_dir).to_s
+      output_file = File.join(@output_dir, rel_path.chomp(input_ext) + output_ext)
+      
       if @options[:unpack]
-        if input_file.downcase.end_with?("scripts#{input_ext}")
+        if File.basename(input_file, ".*").downcase == SCRIPTS_BASENAME
           Logging::Log.info "解包 #{log_basename} -> 脚本文件..."
           input_obj = Converter::IO.load_marshal_data(input_file)
           scripts_output_dir = File.join(@output_dir, SCRIPTS_BASENAME)
@@ -193,16 +210,12 @@ class RgssHandler
           Logging::Log.info "解包 #{log_basename} -> JSON..."
           input_obj = Converter::IO.load_marshal_data(input_file)
           cleaned_data = exporter.export(input_obj)
-          rel_path = Pathname.new(input_file).relative_path_from(@input_dir).to_s
-          output_file = File.join(@output_dir, rel_path.chomp(input_ext) + output_ext)
           Converter::IO.write_json_data(output_file, cleaned_data)
         end
       else # pack
         Logging::Log.info "封包 #{log_basename} -> RVData/RXData..."
         input_data = Converter::IO.load_json_data(input_file)
         restored_obj = restorer.restore(input_data)
-        rel_path = Pathname.new(input_file).relative_path_from(@input_dir).to_s
-        output_file = File.join(@output_dir, rel_path.chomp(input_ext) + output_ext)
         Converter::IO.write_marshal_data(output_file, restored_obj)
       end
     rescue => e
