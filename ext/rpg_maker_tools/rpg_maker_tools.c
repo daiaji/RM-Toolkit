@@ -81,9 +81,45 @@ ID rpg_maker_tools_mkdir_p_id;
 
 // --- 辅助函数 (Helper Functions) ---
 
-// --- NEW: 添加路径清理函数 ---
-// 原地清理路径字符串，移除在大多数文件系统中非法的字符。
-// 使用双指针法，原地修改字符串。
+// --- NEW FUNCTION: 检查字符是否为十六进制 ---
+static bool is_hex_char(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+// --- NEW FUNCTION: 清理 `\uXXXX` 格式的Unicode转义序列 ---
+// 原地清理路径字符串，移除所有 `\uXXXX` 或 `\UXXXX` 格式的文本序列。
+// 这对应于 C# RPGMakerDecrypter 中的 CleanUnicodeCharacters 方法。
+static void sanitize_unicode_escapes_in_place(char *path) {
+    if (!path) return;
+
+    char *read_ptr = path;
+    char *write_ptr = path;
+
+    while (*read_ptr) {
+        // 检查 `\u` 或 `\U` 后跟四个十六进制字符的模式
+        if (*read_ptr == '\\' &&
+            (read_ptr[1] == 'u' || read_ptr[1] == 'U') &&
+            read_ptr[2] && is_hex_char(read_ptr[2]) &&
+            read_ptr[3] && is_hex_char(read_ptr[3]) &&
+            read_ptr[4] && is_hex_char(read_ptr[4]) &&
+            read_ptr[5] && is_hex_char(read_ptr[5]))
+        {
+            // 如果匹配，跳过这6个字符
+            read_ptr += 6;
+        } else {
+            // 否则，复制字符
+            *write_ptr = *read_ptr;
+            write_ptr++;
+            read_ptr++;
+        }
+    }
+    *write_ptr = '\0'; // 终止新字符串
+}
+// --- NEW FUNCTION END ---
+
+// --- 路径清理函数 (移除非法文件系统字符) ---
 static void sanitize_path_in_place(char *path) {
     if (!path) return;
 
@@ -96,13 +132,8 @@ static void sanitize_path_in_place(char *path) {
 
         // 检查常见非法字符 (不包括 '/' 和 '\'，因为它们是路径分隔符)
         switch (current_char) {
-            case '<':
-            case '>':
-            case ':':
-            case '"':
-            case '|':
-            case '?':
-            case '*':
+            case '<': case '>': case ':': case '"':
+            case '|': case '?': case '*':
                 is_invalid = true;
                 break;
             default:
@@ -121,7 +152,6 @@ static void sanitize_path_in_place(char *path) {
     }
     *write_ptr = '\0'; // 终止新字符串
 }
-// --- NEW END ---
 
 static void sys_fail_helper(const char *msg, const char *path) {
   char full_msg[1024];
@@ -132,7 +162,6 @@ static void sys_fail_helper(const char *msg, const char *path) {
 FILE *platform_fopen(const char *utf8_path, const char *mode) {
 #ifdef _WIN32
   wchar_t w_mode[10] = {0};
-  // 修正: 确保 i 不会越界
   size_t i = 0;
   for (; mode[i] != '\0' && i < (sizeof(w_mode) / sizeof(wchar_t)) - 1; ++i) {
     w_mode[i] = (wchar_t)mode[i];
@@ -307,14 +336,15 @@ VALUE rpg_tools_extract_rgssad(VALUE _self, VALUE target_path_rb, VALUE output_d
         free(encrypted_filename_buffer); encrypted_filename_buffer = NULL;
         
         for (unsigned int i = 0; i < filename_size; ++i) if (decrypted_filename_c[i] == '\\') decrypted_filename_c[i] = '/';
-
-        // --- MODIFICATION: 调用路径清理函数 ---
+        
+        // --- MODIFICATION: 调用两种路径清理函数，注意顺序 ---
+        // 1. 清理特殊的 `\uXXXX` Unicode 转义序列
+        sanitize_unicode_escapes_in_place(decrypted_filename_c);
+        // 2. 清理通用的非法文件系统字符
         sanitize_path_in_place(decrypted_filename_c);
         // --- MODIFICATION END ---
         
-        // --- MODIFICATION: 使用 strlen 获取可能变短的路径长度 ---
-        VALUE rb_filename_str = rb_utf8_str_new(decrypted_filename_c, strlen(decrypted_filename_c));
-        // --- MODIFICATION END ---
+        VALUE rb_filename_str = rb_utf8_str_new_cstr(decrypted_filename_c);
         
         VALUE output_full_path_rb = rb_funcall(rpg_maker_tools_File_module, rpg_maker_tools_join_id, 2, output_dir_rb, rb_filename_str);
         VALUE output_dir_part_rb = rb_funcall(rpg_maker_tools_File_module, rpg_maker_tools_dirname_id, 1, output_full_path_rb);
