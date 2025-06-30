@@ -1,7 +1,7 @@
 # 包含 RGSS1 (RPG Maker XP) 特有的类定义
 
-require_relative "shared"         # 加载共享定义 (Table, Color, Tone, Rect, AudioFile 等)
-require_relative "rgss_extensions" # 加载所有版本的扩展 Mixin
+require_relative 'shared'         # 加载共享定义 (Table, Color, Tone, Rect, AudioFile 等)
+require_relative 'rgss_extensions' # 加载所有版本的扩展 Mixin
 
 module RPG
   # --- RGSS1 特定类 ---

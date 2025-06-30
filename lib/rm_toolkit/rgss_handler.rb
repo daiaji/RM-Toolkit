@@ -2,13 +2,12 @@
 require 'find'
 require_relative 'converter'
 require_relative 'utils'
-require_relative 'snapshot_manager' # 需要引入
+require_relative 'snapshot_manager'
 
 class RgssHandler
   SCRIPTS_BASENAME = "scripts".freeze
 
   module ProjectGenerator
-    # ... (此模块内容不变)
     RGSS_PROJECTS = {
       "RGSS1" => {
         file: "Game.rxproj",
@@ -67,15 +66,15 @@ class RgssHandler
     process_archive_extraction_if_needed
     process_project_reconstruction
     parse_config_patterns
-    load_rgss_module
+    
+    # 使用集中式加载器加载当前版本所需的类定义
+    RPG::Loader.load(@version)
     
     files_processed = process_files
     
-    # --- 修改：在解包成功后触发自动快照 ---
     if @options[:unpack] && files_processed > 0
       handle_auto_snapshot("rgss_unpack", "unpacked")
     end
-    # ------------------------------------
 
     Logging::Log.info "RGSS 任务完成。"
   end
@@ -109,7 +108,17 @@ class RgssHandler
   def process_archive_extraction_if_needed
     return unless @options[:unpack]
     archive_config = @config["archive_processing"]
-    return unless archive_config["enabled"] && defined?(RpgMakerTools)
+    
+    # 增加检查和日志
+    unless archive_config["enabled"]
+      Logging::Log.info "配置中已禁用存档提取功能，跳过。"
+      return
+    end
+    
+    unless defined?(RmToolkitNative)
+      Logging::Log.warn "原生 C 扩展未加载，将跳过存档提取功能。请确认已成功编译扩展 (运行 `bundle exec rake compile`)。"
+      return
+    end
 
     archive_filename = archive_config["archive_filenames"][@version]
     return Logging::Log.warn("无法为版本 #{@version} 确定存档文件名，跳过提取。") unless archive_filename
@@ -120,7 +129,7 @@ class RgssHandler
     Logging::Log.info "找到存档文件 '#{archive_filename}'，开始提取到基准目录 '#{@base_dir}'..."
     
     begin
-      RpgMakerTools.extract_rgssad(archive_path, @base_dir, Logging::Log.debug?)
+      RmToolkitNative.extract_rgssad(archive_path, @base_dir, Logging::Log.debug?)
       Logging::Log.info "存档提取成功。"
       
       if archive_config["delete_archive_after_extraction"]
@@ -145,11 +154,6 @@ class RgssHandler
     @exclude_patterns = (@config["exclude_files"] || []).map { |p| Regexp.new(p, Regexp::IGNORECASE) }
   end
 
-  def load_rgss_module
-    require_relative @version.downcase
-  end
-
-  # 返回处理的文件数
   def process_files
     file_list, input_ext, output_ext = get_file_list
     processed_count = 0
@@ -163,7 +167,7 @@ class RgssHandler
     return 0 if file_list.empty?
 
     exporter = @options[:unpack] ? Converter::JsonExporter.new(@version) : nil
-    restorer = @options[:pack] ? Converter::RvdataRestorer.new(@version) : nil
+    restorer = @options[:pack] ? Converter::RubyObjectRestorer.new(@version) : nil
 
     file_list.each do |input_file|
       if process_single_file(input_file, input_ext, output_ext, exporter, restorer)
@@ -214,7 +218,6 @@ class RgssHandler
     raise if @options[:strict]
   end
 
-  # 返回 true 表示成功，false 表示失败
   def process_single_file(input_file, input_ext, output_ext, exporter, restorer)
     log_basename = File.basename(input_file)
     begin
@@ -247,7 +250,6 @@ class RgssHandler
     end
   end
 
-  # --- 新增：自动快照处理函数 ---
   def handle_auto_snapshot(config_key, snapshot_auto_name)
     snapshot_config = @config["snapshot_options"]
     config_key_full = "auto_snapshot_after_#{config_key}"
@@ -256,10 +258,9 @@ class RgssHandler
     Logging::Log.info "配置已启用，将在操作后自动创建快照..."
     begin
       manager = SnapshotManager.new(@base_dir, @config)
-      manager.create(nil, auto_name: snapshot_auto_name)
+      manager.create(auto_name: snapshot_auto_name)
     rescue => e
       Logging::Log.error "自动创建快照失败: #{e.message}"
-      # 这里不中止程序，因为核心操作已完成
     end
   end
 end

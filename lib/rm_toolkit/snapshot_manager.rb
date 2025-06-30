@@ -20,8 +20,10 @@ class SnapshotManager
     @snapshots_root_path = @base_dir.join(@snapshots_root_name)
   end
 
-  # 创建快照，增加 auto_name 用于自动快照场景
-  def create(user_name = nil, auto_name: "auto")
+  # 创建快照
+  # @param name [String, nil] 用户指定的快照名称 (关键字参数)
+  # @param auto_name [String] 自动快照场景下的默认名称
+  def create(name: nil, auto_name: "auto")
     Logging::Log.info "开始创建源码目录 '#{@source_dir_name}' 的快照..."
 
     unless @source_dir_path.directory?
@@ -32,7 +34,7 @@ class SnapshotManager
     
     timestamp = Time.now.strftime("%Y%m%d_%H%M%S")
     # 如果用户提供了名称，则使用用户名称；否则使用自动名称
-    base_name = user_name || auto_name
+    base_name = name || auto_name
     cleaned_name = base_name ? base_name.gsub(/[\s\W]+/, '_').gsub(/_+/, '_').chomp('_') : ""
     
     format_string = @snapshot_config['format']
@@ -44,8 +46,7 @@ class SnapshotManager
 
     snapshot_path = @snapshots_root_path.join(snapshot_dir_name_base)
     
-    # --- 修改：处理名称冲突 ---
-    # 如果目标路径已存在，则在后面添加一个序号
+    # 处理名称冲突：如果目标路径已存在，则在后面添加一个序号
     counter = 1
     while snapshot_path.exist?
       new_name = "#{snapshot_dir_name_base}_#{counter}"
@@ -53,7 +54,6 @@ class SnapshotManager
       counter += 1
       Logging::Log.warn "快照目录已存在，尝试新名称: #{snapshot_path.basename}" if counter > 1
     end
-    # --- 修改结束 ---
 
     begin
       FileUtils.cp_r(@source_dir_path.to_s, snapshot_path.to_s, preserve: true)
@@ -64,7 +64,7 @@ class SnapshotManager
     end
   end
 
-  # 列出快照 (不变)
+  # 列出快照
   def list
     puts "可用的源码快照 (位于 '#{@snapshots_root_name}'):"
     
@@ -86,7 +86,7 @@ class SnapshotManager
     end
   end
 
-  # 恢复快照 (不变)
+  # 恢复快照
   def restore(snapshot_name, force = false)
     raise "错误: 必须提供要恢复的快照名称。" if snapshot_name.nil? || snapshot_name.empty?
 

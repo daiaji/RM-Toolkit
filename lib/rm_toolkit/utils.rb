@@ -2,7 +2,7 @@
 # 提供通用的辅助函数
 
 # Logging 模块应已加载 (通过 application.rb 或直接 require)
-# require_relative "logging"
+# require_relative 'logging'
 
 module Utils
   # 将 Ruby 内部字符串 (可能来自 Marshal.load) 解包为 UTF-8 编码的字符串
@@ -86,7 +86,7 @@ module Utils
         # 2. 尝试使用 rchardet gem 进行检测 (如果已安装)
         begin
           # 延迟加载 rchardet，避免不必要的依赖
-          require "rchardet" unless defined?(CharDet)
+          require 'rchardet' unless defined?(CharDet)
           # 只检测字符串开头的一部分以提高效率
           sample = str.byteslice(0, 4096) || "" # 取最多 4KB
           # 调用 rchardet 进行检测

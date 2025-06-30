@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # inspect_rvdata.rb - 通用 RVData 文件检查器 (完全动态类定义)
 
-require "pp" # PrettyPrint for better output
-require "set" # Need Set for defined_classes
+require 'pp' # PrettyPrint for better output
+require 'set' # Need Set for defined_classes
 
 # --- Lazy Class/Module Definition ---
 # Define top-level RPG module if it doesn't exist, needed as a namespace container

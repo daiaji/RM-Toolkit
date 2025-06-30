@@ -1,4 +1,4 @@
-# rvdata2json/lib/application.rb
+# RM-Toolkit/lib/application.rb
 require 'optparse'
 require 'pathname'
 require 'fileutils'
@@ -11,10 +11,14 @@ $LOAD_PATH.unshift(ext_path) unless $LOAD_PATH.include?(ext_path)
 
 # 尝试加载 C 扩展
 begin
-  require "rpg_maker_tools/rpg_maker_tools"
+  require 'rm_toolkit/native'
   NATIVE_TOOLS_LOADED = true
 rescue LoadError => e
   NATIVE_TOOLS_LOADED = false
+  # 在这里添加一个临时的警告，因为 Logging 模块此时可能还未初始化
+  # 这个警告会在 Logging 初始化后被更详细的日志覆盖
+  $stderr.puts "[初始警告] 原生 C 扩展加载失败。存档提取和 MV/MZ 解密功能将不可用。"
+  $stderr.puts "[初始警告] 详情: #{e.message}"
 end
 
 require_relative 'logging'
@@ -22,7 +26,7 @@ require_relative 'configuration'
 require_relative 'version_detector'
 require_relative 'rgss_handler'
 require_relative 'mv_mz_handler'
-require_relative 'snapshot_manager' # 引入新的快照管理器
+require_relative 'snapshot_manager'
 
 class Application
   RGSS_VERSIONS = %w[RGSS1 RGSS2 RGSS3 MV MZ].freeze
@@ -85,7 +89,7 @@ class Application
     input_path = File.expand_path(@options[:extract_archive_path], @base_dir)
     output_path = @options[:extract_output_path] ? File.expand_path(@options[:extract_output_path]) : File.expand_path(DEFAULT_STANDALONE_EXTRACT_DIR, Dir.pwd)
     FileUtils.mkdir_p(output_path)
-    RpgMakerTools.extract_rgssad(input_path, output_path, Logging::Log.debug?)
+    RmToolkitNative.extract_rgssad(input_path, output_path, Logging::Log.debug?)
     Logging::Log.info "存档已提取到: #{output_path}"
   end
   
@@ -115,7 +119,7 @@ class Application
   
   def parse_options
     OptionParser.new do |opts|
-      opts.banner = "用法: rvdata2json.rb [选项]"
+      opts.banner = "用法: RM-Toolkit.rb [选项]"
       opts.separator ""
       opts.separator "常规操作:"
       opts.on("-b", "--base-dir DIR", "指定基准目录 (默认: 当前目录)") { |d| @options[:base_dir] = d }
@@ -147,7 +151,7 @@ class Application
       opts.on("-o", "--extract-output-dir DIR", "独立提取的输出目录") { |d| @options[:extract_output_path] = d }
       opts.on("--rgss1", "强制使用 RGSS1 (XP)") { @options[:rgss_version] = "RGSS1" }
       opts.on("--rgss2", "强制使用 RGSS2 (VX)") { @options[:rgss_version] = "RGSS2" }
-      opts.on("--rgss3", "强制使用 RGSS3 (VX Ace)") { @options::rgss_version = "RGSS3" }
+      opts.on("--rgss3", "强制使用 RGSS3 (VX Ace)") { @options[:rgss_version] = "RGSS3" } # <--- BUG 修复
       opts.on("--mv", "强制使用 RPG Maker MV") { @options[:rgss_version] = "MV" }
       opts.on("--mz", "强制使用 RPG Maker MZ") { @options[:rgss_version] = "MZ" }
       opts.on("--log-level LEVEL", "设置日志级别 (DEBUG, INFO, WARN, ERROR)") { |l| @options[:log_level] = l.upcase }
@@ -156,7 +160,8 @@ class Application
   end
 
   def determine_base_directory
-    @base_dir = @options[:base_dir] ? File.expand_path(@options[:base_dir]) : Dir.pwd
+    # 使用 || 提供默认值，代码更简洁
+    @base_dir = File.expand_path(@options[:base_dir] || Dir.pwd) # <--- 代码简化
     raise "基准目录不存在: #{@base_dir}" unless Dir.exist?(@base_dir)
   end
   

@@ -3,7 +3,7 @@
 # 注意: 某些类 (如 Map, System) 在这里只定义了基本框架或共享属性，
 #       具体的版本实现或扩展在 rgss1.rb, rgss2.rb, rgss3.rb 中完成。
 
-require_relative "utils" # 加载通用工具函数 (如字符串解包)
+require_relative 'utils' # 加载通用工具函数 (如字符串解包)
 
 # --- RPG 模块 ---
 # 作为所有 RPG Maker 数据类的命名空间

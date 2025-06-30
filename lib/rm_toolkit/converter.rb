@@ -1,12 +1,12 @@
 # 包含核心的 RVData/RXData <-> JSON 转换逻辑
 
-require "oj"        # 用于快速 JSON 解析和生成
-require "fileutils" # 用于文件操作，如创建目录
-require "set"       # 用于高效地处理已访问对象集合
-require "zlib"      # 用于处理 Scripts.rvdata 中的压缩脚本
+require 'oj'        # 用于快速 JSON 解析和生成
+require 'fileutils' # 用于文件操作，如创建目录
+require 'set'       # 用于高效地处理已访问对象集合
+require 'zlib'      # 用于处理 Scripts.rvdata 中的压缩脚本
 
 # Logging 模块应已加载 (通过 application.rb 或直接 require)
-# require_relative "logging" # 如果需要独立运行此文件，则取消注释
+# require_relative 'logging' # 如果需要独立运行此文件，则取消注释
 
 module Converter
 
@@ -67,7 +67,7 @@ module Converter
         data = Oj.load(json_string, mode: :compat, symbol_keys: false)
         # 特殊处理: 如果是 MapInfos.json，添加来源文件信息 (用于恢复时特殊处理键)
         if data.is_a?(Hash) && File.basename(input_file, ".json") == "MapInfos"
-          data["__rvdata2json_source_file__"] = input_file
+          data["__RM-Toolkit_source_file__"] = input_file
         end
         data
       rescue Oj::ParseError => e
@@ -186,7 +186,7 @@ module Converter
           end
         when Hash
           # 遍历哈希值 (忽略内部使用的键)
-          object.reject { |k, _| k == "__rvdata2json_source_file__" }.each do |key, value|
+          object.reject { |k, _| k == "__RM-Toolkit_source_file__" }.each do |key, value|
             result = find_problematic_path(value, "#{current_path}{#{key.inspect}}", visited, &block)
             break if result # 找到后立即停止遍历
           end
@@ -220,7 +220,7 @@ module Converter
   class JsonExporter
     # 定义不同 RGSS 版本导出时需要移除的多余属性
     # (这些属性要么是旧版本的残留，要么在目标版本中由其他机制处理)
-    ATTRIBUTES_REMOVED = {
+    FILTERS_BY_VERSION = {
       "RGSS3" => { # 导出为 RGSS3 格式时，移除这些来自 RGSS1/2 的属性
         "RPG::Actor" => Set.new([:@exp_basis, :@exp_inflation, :@parameters, :@weapon_id, :@armor1_id, :@armor2_id, :@armor3_id, :@armor4_id, :@two_swords_style, :@fix_equipment, :@auto_battle, :@super_guard, :@pharmacology, :@critical_bonus]),
         "RPG::Class" => Set.new([:@position, :@weapon_set, :@armor_set, :@element_ranks, :@state_ranks, :@skill_name_valid, :@skill_name]),
@@ -311,7 +311,7 @@ module Converter
           object.each { |item| unpack_recursively(item) }
         elsif object.is_a?(Hash)
           # 遍历哈希键和值 (忽略内部键)
-          object.reject { |k, _| k == "__rvdata2json_source_file__" }.each do |key, value|
+          object.reject { |k, _| k == "__RM-Toolkit_source_file__" }.each do |key, value|
             unpack_recursively(key)
             unpack_recursively(value)
           end
@@ -359,7 +359,7 @@ module Converter
         elsif object.is_a?(Hash)
           # 如果是哈希，递归清理其键和值
           result = {}
-          object.reject { |k, _| k == "__rvdata2json_source_file__" }.each do |key, value|
+          object.reject { |k, _| k == "__RM-Toolkit_source_file__" }.each do |key, value|
             cleaned_key = clean_for_export(key)
             cleaned_value = clean_for_export(value)
             result[cleaned_key] = cleaned_value
@@ -389,7 +389,7 @@ module Converter
         elsif object.is_a?(Hash)
           result = {}
           @visited_clean[oid] = result # 存入缓存以处理循环
-          object.reject { |k, _| k == "__rvdata2json_source_file__" }.each do |key, value|
+          object.reject { |k, _| k == "__RM-Toolkit_source_file__" }.each do |key, value|
             cleaned_key = clean_for_export(key)
             cleaned_value = clean_for_export(value)
             result[cleaned_key] = cleaned_value
@@ -414,7 +414,7 @@ module Converter
           is_map_infos = class_name_str == "Hash" && object.keys.all? { |k| k.is_a?(Integer) }
           result = {}
           @visited_clean[oid] = result # 存入缓存
-          object.reject { |k, _| k == "__rvdata2json_source_file__" }.each do |key, value|
+          object.reject { |k, _| k == "__RM-Toolkit_source_file__" }.each do |key, value|
             cleaned_key = clean_for_export(key)
             cleaned_value = clean_for_export(value)
             # MapInfos 的键转为字符串，以便 JSON 正确表示
@@ -484,7 +484,7 @@ module Converter
           @visited_clean[oid] = result # 存入缓存
 
           # --- 确定要过滤掉的属性 ---
-          removed_attrs_for_target = ATTRIBUTES_REMOVED[@rgss_version] || {}
+          removed_attrs_for_target = FILTERS_BY_VERSION[@rgss_version] || {}
           filter_set = Set.new
           # 遍历继承链，合并所有父类需要过滤的属性
           klass = object.class
@@ -527,12 +527,12 @@ module Converter
     end
   end # class JsonExporter
 
-  # --- RVData 恢复器 类 ---
+  # --- Ruby 对象恢复器 类 ---
   # 负责将从 JSON 加载的数据结构恢复为 Ruby 对象
-  class RvdataRestorer
-    # 为特定类定义简化的实例化器
-    # 这些类要么需要参数初始化，要么结构固定，可以通过构造函数直接创建
-    REDUCED_CLASS_INSTANTIATORS = {
+  class RubyObjectRestorer
+    # 为特定类定义特殊的实例化器。
+    # 这些类要么需要参数初始化，要么结构固定，可以通过构造函数直接创建。
+    CLASS_INSTANTIATORS = {
       # 事件和命令类，需要参数初始化
       "RPG::Event" => ->(data, restorer) { RPG::Event.new(data["@x"], data["@y"]) },
       "RPG::EventCommand" => ->(data, restorer) { RPG::EventCommand.new(data["@code"], data["@indent"], restorer.restore_value(data["@parameters"])) },
@@ -577,7 +577,7 @@ module Converter
       @rgss_version = rgss_version
       # 对象缓存，用于处理循环引用
       @object_cache = {}
-      Logging::Log.debug "RvdataRestorer 初始化完成，目标版本: #{@rgss_version}" if Logging::Log.debug?
+      Logging::Log.debug "RubyObjectRestorer 初始化完成，目标版本: #{@rgss_version}" if Logging::Log.debug?
     end
 
     # 执行恢复过程
@@ -588,9 +588,9 @@ module Converter
       @object_cache.clear # 清空上次恢复的缓存
 
       # 特殊处理 MapInfos: 键需要从字符串转回整数
-      if data.is_a?(Hash) && data.key?("__rvdata2json_source_file__") && File.basename(data["__rvdata2json_source_file__"], ".json") == "MapInfos"
+      if data.is_a?(Hash) && data.key?("__RM-Toolkit_source_file__") && File.basename(data["__RM-Toolkit_source_file__"], ".json") == "MapInfos"
         Logging::Log.debug "恢复 MapInfos (特殊处理来源文件键)..." if Logging::Log.debug?
-        actual_data = data.reject { |k, _| k == "__rvdata2json_source_file__" }
+        actual_data = data.reject { |k, _| k == "__RM-Toolkit_source_file__" }
         restored_map_infos = {}
         actual_data.each do |key, value_data|
           restored_map_infos[key.to_i] = restore_value(value_data) # 递归恢复值
@@ -683,10 +683,10 @@ module Converter
     # 实例化对象
     # 优先使用简化的实例化器，否则调用默认构造函数
     def instantiate_object(klass, data)
-      if REDUCED_CLASS_INSTANTIATORS.key?(klass.name)
+      if CLASS_INSTANTIATORS.key?(klass.name)
         # 使用注册的特殊实例化器
         begin
-          instance = REDUCED_CLASS_INSTANTIATORS[klass.name].call(data, self)
+          instance = CLASS_INSTANTIATORS[klass.name].call(data, self)
           # 特殊处理: RGSS3 特有类在非 RGSS3 环境下实例化可能返回 nil，这是正常的
           is_rgss3_feature_like = defined?(RPG::BaseItem::Feature) && [RPG::BaseItem::Feature, RPG::UsableItem::Effect, RPG::UsableItem::Damage].include?(klass)
           if instance.nil? && is_rgss3_feature_like
@@ -728,7 +728,7 @@ module Converter
         # 处理需要参数的构造函数错误
         known_param_classes = ["RPG::Event", "RPG::Map"] # 已知需要参数但可能未在注册表中的类
         if known_param_classes.include?(klass.name)
-          Logging::Log.error "类 #{klass.name} 需要初始化参数，但未在 REDUCED_CLASS_INSTANTIATORS 中配置。请检查注册表或类的 initialize 方法。"
+          Logging::Log.error "类 #{klass.name} 需要初始化参数，但未在 CLASS_INSTANTIATORS 中配置。请检查注册表或类的 initialize 方法。"
         else
           Logging::Log.error "实例化通用类 #{klass.name} 时发生 ArgumentError: #{e.message}。是否需要参数？"
         end
@@ -746,7 +746,7 @@ module Converter
 
       data.each do |key, value|
         # 跳过内部使用的键和非实例变量键
-        next if key == "json_class" || key == "__rvdata2json_source_file__" || key.start_with?("@_")
+        next if key == "json_class" || key == "__RM-Toolkit_source_file__" || key.start_with?("@_")
         next unless key.start_with?("@")
 
         ivar_symbol = key.to_sym
@@ -804,11 +804,10 @@ module Converter
         end
       end
     end
-  end # class RvdataRestorer
+  end # class RubyObjectRestorer
 
   # --- 脚本处理 模块 ---
   # 负责解包和打包 Scripts.rvdata 文件
-  # --- 脚本处理 模块 ---
   module Scripts
     METADATA_FILENAME = "Scripts_info.json".freeze
     SCRIPTS_SUBDIR = "Scripts".freeze
@@ -818,7 +817,7 @@ module Converter
     # @param scripts_array [Array] 从 Scripts.rvdata 加载的数组
     # @param scripts_output_directory [String] 脚本文件和元数据输出的目录 (例如 /path/to/Source/Scripts)
     # @raise [ArgumentError] 如果输入数据不是数组
-    def self.unpack(scripts_array, scripts_output_directory) # <--- 参数名修改为 scripts_output_directory
+    def self.unpack(scripts_array, scripts_output_directory)
       # 验证输入类型
       unless scripts_array.is_a?(Array)
         err_msg = "无效的脚本数据: 顶层对象不是数组。"
@@ -826,13 +825,10 @@ module Converter
         raise ArgumentError, err_msg
       end
 
-      # --- 修改点：直接使用传入的目录，不再拼接 ---
-      scripts_output_dir = scripts_output_directory # <--- 直接使用参数值
-      # 移除: scripts_output_dir = File.join(json_output_base_dir, SCRIPTS_SUBDIR)
-      # --- 修改结束 ---
+      scripts_output_dir = scripts_output_directory
 
       Logging::Log.info "确保脚本输出目录存在: #{scripts_output_dir}"
-      FileUtils.mkdir_p(scripts_output_dir) # 现在创建的是正确的目录
+      FileUtils.mkdir_p(scripts_output_dir)
 
       metadata = [] # 存储脚本元数据
       # 遍历脚本数组
@@ -895,13 +891,11 @@ module Converter
 
         # 生成脚本文件名 (按索引顺序)
         script_filename = format("%03d.rb", index)
-        # *** 现在直接在 scripts_output_dir 下创建文件 ***
-        script_filepath = File.join(scripts_output_dir, script_filename) # 路径现在是正确的
+        script_filepath = File.join(scripts_output_dir, script_filename)
 
         # 写入脚本文件
         begin
-          File.binwrite(script_filepath, script_code) # 使用二进制写入以保留原始换行符等
-          # 更新日志，显示正确的输出目录
+          File.binwrite(script_filepath, script_code)
           Logging::Log.info "  解包脚本: #{script_filename} (ID: #{id}, Name: '#{name_processed_for_json}') 到 #{scripts_output_dir}"
         rescue => e
           Logging::Log.error "写入脚本文件 '#{script_filepath}' 失败: #{e.message}"
@@ -911,19 +905,15 @@ module Converter
         metadata << { id: id, name: name_processed_for_json, index: index }
       end # scripts_array.each end
 
-      # --- 写入元数据文件 ---
-      # *** 元数据文件也写入了正确的目录 ***
       metadata_filepath = File.join(scripts_output_dir, METADATA_FILENAME)
       begin
         json_string = Oj.dump(metadata, mode: :compat, indent: 2)
         File.write(metadata_filepath, json_string, encoding: "UTF-8")
-        # 更新日志，显示完整路径
         Logging::Log.info "  写入脚本元数据: #{metadata_filepath}"
       rescue => e
         Logging::Log.error "写入脚本元数据文件 '#{metadata_filepath}' 失败: #{e.message}"
       end
-      # --- 元数据写入结束 ---
-    end # def unpack end
+    end
 
     # 打包脚本文件为 Scripts.rvdata
     # @param scripts_input_dir [String] 包含脚本文件和元数据文件的目录 (例如 /path/to/Source/Scripts)
@@ -931,9 +921,8 @@ module Converter
     # @raise [IOError] 如果元数据文件未找到
     # @raise [TypeError] 如果元数据文件内容不是数组
     # @raise [RuntimeError] 如果发生 JSON 解析或其他加载错误
-    def self.pack(scripts_input_dir) # <--- 参数名不变，但含义清晰
+    def self.pack(scripts_input_dir)
       metadata_filepath = File.join(scripts_input_dir, METADATA_FILENAME)
-      # 检查元数据文件是否存在
       unless File.exist?(metadata_filepath)
         err_msg = "脚本元数据文件未找到: #{metadata_filepath}"
         Logging::Log.error err_msg
@@ -955,36 +944,30 @@ module Converter
         raise "加载元数据时出错。详情请查看日志。"
       end
 
-      # 验证元数据格式
       unless metadata.is_a?(Array)
         err_msg = "脚本元数据文件 '#{metadata_filepath}' 的内容不是有效的 JSON 数组。"
         Logging::Log.error err_msg
         raise TypeError, err_msg
       end
 
-      # 确定最终数组大小 (基于最大索引)
       max_index = metadata.map { |info| info["index"] }.compact.max || -1
-      scripts_array = Array.new(max_index + 1) # 用 nil 填充
+      scripts_array = Array.new(max_index + 1)
 
       Logging::Log.info "开始脚本打包过程 (源: #{scripts_input_dir})..."
-      # 遍历元数据，读取、压缩并填充脚本数组
       metadata.each do |script_info|
         index = script_info["index"]
         id = script_info["id"]
         name = script_info["name"]
 
-        # 验证元数据条目
         unless index.is_a?(Integer) && index >= 0 && id.is_a?(Integer) && name.is_a?(String)
           Logging::Log.warn "跳过无效的元数据条目: #{script_info.inspect}"
           next
         end
 
-        # 构造脚本文件路径 (在 scripts_input_dir 下)
         script_filename = format("%03d.rb", index)
         script_filepath = File.join(scripts_input_dir, script_filename)
         script_code = ""
 
-        # 读取脚本文件内容
         if File.exist?(script_filepath)
           begin
             script_code = File.binread(script_filepath)
@@ -998,20 +981,18 @@ module Converter
           script_code = ""
         end
 
-        # 压缩脚本代码
-        compressed_code = Zlib::Deflate.deflate("") # 默认压缩空字符串
+        compressed_code = Zlib::Deflate.deflate("")
         begin
           compressed_code = Zlib::Deflate.deflate(script_code)
         rescue => e
           Logging::Log.error "压缩脚本代码失败 (Index #{index}, ID #{id}, Name '#{name}'): #{e.message}。将使用压缩后的空字符串。"
         end
 
-        # 填充脚本数组 [id, name, compressed_code]
         scripts_array[index] = [id, name, compressed_code]
-      end # metadata.each end
+      end
 
       Logging::Log.info "脚本打包完成，准备进行 Marshal 转储。"
       return scripts_array
-    end # def pack end
+    end
   end # module Scripts
 end # module Converter

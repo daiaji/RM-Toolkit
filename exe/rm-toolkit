@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+
+# 为 Bundler 设置加载路径
+require 'bundler/setup'
+
+# 使用下划线加载 gem 的主入口文件 (lib/rm_toolkit.rb)
+require 'rm_toolkit/rm_toolkit'
+
+# 调用顶层模块提供的便捷方法来启动应用，实现最佳封装
+RmToolkit.run(ARGV)

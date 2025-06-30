@@ -1,4 +1,4 @@
-# 配置文件 for rvdata2json.rb
+# 配置文件 for RM-Toolkit.rb
 
 # 默认 RGSS 版本 (如果命令行未指定且无法自动检测)
 # 可选值: "RGSS1", "RGSS2", "RGSS3", "MV", "MZ"
@@ -33,12 +33,9 @@ snapshot_options:
   directory: ".snapshots"
   format: "{dirname}_snapshot_{name}_{timestamp}"
 
-  # --- 新增：自动快照配置 ---
+  # --- 自动快照配置 ---
   # 在 RGSS 解包 (--unpack) 成功后自动创建初始快照
   auto_snapshot_after_rgss_unpack: true
-  # 在 MV/MZ 项目重建 (--reconstruct) 成功后自动创建初始快照
-  auto_snapshot_after_mv_mz_reconstruct: true
-  # -------------------------
 
 # 要处理的文件基础名列表
 files:
@@ -65,8 +62,8 @@ exclude_files:
 
 # --- 日志配置 ---
 logging:
-  log_level: "INFO"
-  log_to_file: true
+  log_level: "WARN"
+  log_to_file: false
   log_directory: "logs"
-  log_filename_format: "rvdata2json_{timestamp}.log"
+  log_filename_format: "RM-Toolkit_{timestamp}.log"
   enable_colors: true

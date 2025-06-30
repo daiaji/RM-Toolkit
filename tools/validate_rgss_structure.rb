@@ -23,12 +23,12 @@
 #   - ***新增***: 在脚本末尾总结所有动态创建的占位符列表。
 #   - 所有注释使用中文。
 
-require "pp"
-require "set"
-require "logger"
-require "fileutils"
-require "pathname"
-require "optparse" # 用于解析命令行参数
+require 'pp'
+require 'set'
+require 'logger'
+require 'fileutils'
+require 'pathname'
+require 'optparse' # 用于解析命令行参数
 
 # --- 全局配置 ---
 MAX_RETRIES = 50 # 使用 RGSS3 的较高值作为默认，适应更复杂情况

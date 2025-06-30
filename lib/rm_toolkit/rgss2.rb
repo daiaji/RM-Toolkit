@@ -1,8 +1,8 @@
 # 包含 RGSS2 (RPG Maker VX) 特有的类定义或对共享类的修改
 # 修正: RPG::Animation::Frame#initialize 添加 super() 调用
 
-require_relative "shared" # 加载共享定义
-require_relative "rgss_extensions" # 加载版本特定扩展
+require_relative 'shared' # 加载共享定义
+require_relative 'rgss_extensions' # 加载版本特定扩展
 
 # --- RGSS2 特有类定义 ---
 module RPG

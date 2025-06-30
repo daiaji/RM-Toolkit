@@ -1,7 +1,7 @@
 # 包含 RGSS3 (RPG Maker VX Ace) 特有的类定义或对共享类的修改
 
-require_relative "shared"         # 加载共享定义 (包括基类 RPG::BaseItem, RPG::UsableItem)
-require_relative "rgss_extensions" # 加载版本特定扩展 Mixin
+require_relative 'shared'         # 加载共享定义 (包括基类 RPG::BaseItem, RPG::UsableItem)
+require_relative 'rgss_extensions' # 加载版本特定扩展 Mixin
 
 module RPG
   # --- RGSS3 特有嵌套类定义 ---

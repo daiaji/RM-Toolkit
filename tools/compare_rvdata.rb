@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 # compare_rvdata_folders.rb - 对比两个文件夹下匹配的 RVData 文件的数据差异 (完全动态类定义, 带日志聚合)
 
-require "pp" # PrettyPrint for better output
-require "set" # Need Set for defined_classes and file list processing
-require "logger" # Required for logging to file
-require "fileutils" # Required for creating log directory
-require "pathname" # For path manipulation
+require 'pp' # PrettyPrint for better output
+require 'set' # Need Set for defined_classes and file list processing
+require 'logger' # Required for logging to file
+require 'fileutils' # Required for creating log directory
+require 'pathname' # For path manipulation
 
 # --- Configuration ---
 MAX_RETRIES = 100 # Increased retry limit for complex files

@@ -25,7 +25,7 @@ ext/**/native.c_non_io_uring*
 *.dll
 
 # --- Temporary directories from gems/extensions ---
-ext/tmp/
+tmp/
 
 # --- Runtime artifacts ---
 logs/

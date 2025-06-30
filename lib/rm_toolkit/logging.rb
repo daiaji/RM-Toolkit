@@ -1,8 +1,8 @@
 # 为应用程序设置全局日志记录器接口
 
-require "logger"     # Ruby 标准日志库
-require "fileutils"  # 用于创建日志目录
-require "pathname"   # 用于处理日志文件路径
+require 'logger'     # Ruby 标准日志库
+require 'fileutils'  # 用于创建日志目录
+require 'pathname'   # 用于处理日志文件路径
 
 # --- 日志模块 ---
 module Logging
@@ -119,8 +119,8 @@ module Logging
     end
 
     # 3. 确定日志文件名格式
-    log_filename_format = config_logging["log_filename_format"] || "rvdata2json_{timestamp}.log"
-    log_filename_format = "rvdata2json_{timestamp}.log" if log_filename_format.empty? # 防止空格式
+    log_filename_format = config_logging["log_filename_format"] || "RM-Toolkit_{timestamp}.log"
+    log_filename_format = "RM-Toolkit_{timestamp}.log" if log_filename_format.empty? # 防止空格式
 
     # 4. 确定是否启用控制台颜色
     enable_colors = true # 默认启用

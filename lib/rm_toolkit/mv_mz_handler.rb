@@ -127,6 +127,16 @@ class MvMzHandler
 
   def process
     validate_operation
+    
+    # --- 新增的检查 ---
+    unless defined?(RmToolkitNative)
+      error_message = "错误: MV/MZ 处理器需要原生 C 扩展来进行文件解密，但扩展未加载。请先运行 `bundle exec rake compile` 进行编译。"
+      Logging::Log.error error_message
+      raise error_message if @options[:strict]
+      return # 在非严格模式下中止此处理器的任务
+    end
+    # --- 检查结束 ---
+    
     data_dir = find_data_directory
     
     output_dir_name = @config["project_structure"]["source_data_dir"]
@@ -144,8 +154,7 @@ class MvMzHandler
       ProjectReconstructor.reconstruct(data_dir, output_dir, @version, @options[:overwrite], @dynamic_dir_whitelist)
       update_system_json_encryption_flags(output_dir)
       
-      # 在重建成功后触发自动快照
-      handle_auto_snapshot("mv_mz_reconstruct", "reconstructed")
+      # *** 此处已移除自动快照调用 ***
     end
 
     if key != :no_encryption
@@ -276,7 +285,7 @@ class MvMzHandler
         
         begin
           # 调用 C 扩展进行解密
-          RpgMakerTools.decrypt_mv_mz(path, output_file_path, key)
+          RmToolkitNative.decrypt_mv_mz(path, output_file_path, key)
         rescue => e
           Logging::Log.error "解密文件 '#{relative_path}' 失败: #{e.message}"
           raise if @options[:strict]
