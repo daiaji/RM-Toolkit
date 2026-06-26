@@ -397,5 +397,51 @@ module Scripts
       Logging::Log.info "脚本打包完成，准备进行 Marshal 转储。"
       return scripts_array
     end
+
+    def self.remove_scripts(scripts_input_dir, remove_index: nil, prune_empty: false)
+      metadata_filepath = File.join(scripts_input_dir, METADATA_FILENAME)
+      raise IOError, "元数据文件未找到: #{metadata_filepath}" unless File.exist?(metadata_filepath)
+
+      json_string = File.read(metadata_filepath, encoding: "UTF-8")
+      metadata = Oj.load(json_string, mode: :compat, symbol_keys: false)
+      raise TypeError, "元数据不是数组" unless metadata.is_a?(Array)
+
+      doomed = []
+      if remove_index
+        entry = metadata.find { |m| m["index"] == remove_index }
+        raise "未找到 index=#{remove_index} 的脚本" unless entry
+        doomed << entry
+      end
+
+      if prune_empty
+        metadata.each do |m|
+          f = File.join(scripts_input_dir, format("%03d.rb", m["index"]))
+          doomed << m if File.exist?(f) && File.size(f) == 0
+        end
+      end
+
+      return if doomed.empty?
+
+      del_is = doomed.map { |m| m["index"] }.sort.uniq
+      Logging::Log.info "删除脚本索引: #{del_is.join(', ')}"
+      metadata.reject! { |m| del_is.include?(m["index"]) }
+
+      old_to_new = {}
+      metadata.sort_by { |m| m["index"] }.each_with_index do |m, i|
+        old_to_new[m["index"]] = i
+        m["index"] = i
+      end
+
+      del_is.each { |i| FileUtils.rm_f(File.join(scripts_input_dir, format("%03d.rb", i))) }
+
+      old_to_new.select { |old_i, new_i| old_i != new_i }.sort.reverse.each do |old_i, new_i|
+        old_f = File.join(scripts_input_dir, format("%03d.rb", old_i))
+        new_f = File.join(scripts_input_dir, format("%03d.rb", new_i))
+        FileUtils.mv(old_f, new_f) if File.exist?(old_f)
+      end
+
+      File.write(metadata_filepath, Oj.dump(metadata, mode: :compat, indent: 2))
+      Logging::Log.info "元数据已更新，剩余 #{metadata.size} 个脚本"
+    end
   end # module Scripts
 end # module Converter
