@@ -5,38 +5,51 @@ require_relative '../logging'
 
 module RPG
   class Loader
+    VERSION_DIRS = {
+      "RGSS1" => "xp",
+      "RGSS2" => "vx",
+      "RGSS3" => "vx_ace",
+    }.freeze
+
     @loaded_version = nil
-    # --- 修改开始 ---
-    # 直接实例化一个 Mutex 对象，而不是 include mixin
-    @lock = Mutex.new 
-    # --- 修改结束 ---
+    @lock = Mutex.new
 
     class << self
       def load(version)
-        # --- 修改开始 ---
-        # 调用实例化的 @lock 对象的 synchronize 方法
         @lock.synchronize do
-        # --- 修改结束 ---
           if @loaded_version && @loaded_version != version
             raise "错误: 已加载 RGSS 版本 '#{@loaded_version}', 无法再加载 '#{version}'。程序状态不一致，必须中止。"
           end
-          
+
           unless @loaded_version == version
+            dir = VERSION_DIRS[version] or raise "未知版本: #{version}"
             Logging::Log.info "RPG::Loader 正在加载版本定义: #{version}"
-            begin
-              require_relative "../#{version.downcase}"
-              @loaded_version = version
-              Logging::Log.info "成功加载 RGSS 版本定义: #{version}"
-            rescue LoadError => e
-              err_msg = "无法加载 RGSS 版本定义文件 for '#{version}'。请确保 'lib/rm_toolkit/#{version.downcase}.rb' 文件存在。原始错误: #{e.message}"
-              Logging::Log.fatal err_msg
-              raise LoadError, err_msg
+
+            base = File.join(__dir__, dir)
+            unless Dir.exist?(base)
+              raise LoadError, "版本定义目录不存在: #{base}"
             end
-          else
-            Logging::Log.debug "RGSS 版本 '#{version}' 的定义已经加载，跳过。"
+
+            # 1. 加载 Jsonable 模块（只一次）
+            mixins_dir = File.join(__dir__, "mixins")
+            Dir[File.join(mixins_dir, "*.rb")].sort.each { |f| require f }
+
+            # 2. 加载基础类型（rgss/）
+            Dir[File.join(base, "rgss", "*.rb")].sort.each { |f| require f }
+
+            # 3. 加载 RPG 类（rpg/），基类优先
+            rpg_files = Dir[File.join(base, "rpg", "*.rb")]
+            %w[base_item usable_item equip_item].each do |base_name|
+              f = rpg_files.find { |ff| File.basename(ff) == "#{base_name}.rb" }
+              rpg_files.delete(f) && require(f) if f
+            end
+            rpg_files.sort.each { |f| require f }
+
+            @loaded_version = version
+            Logging::Log.info "成功加载 RGSS 版本定义: #{version}"
           end
+          true
         end
-        true
       end
 
       def loaded?

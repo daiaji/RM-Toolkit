@@ -11,13 +11,7 @@ require_relative 'configuration'
 require_relative 'version_detector'
 require_relative 'snapshot_manager'
 require_relative 'converter'
-require_relative 'shared'
-require_relative 'rgss_extensions'
-
-# --- 修改开始 ---
-# 引入新的集中式版本加载器，而不是直接加载 rgss1/2/3.rb
 require_relative 'rgss/loader'
-# --- 修改结束 ---
 
 require_relative 'rgss_handler'
 require_relative 'mv_mz_handler'

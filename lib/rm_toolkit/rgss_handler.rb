@@ -177,11 +177,8 @@ class RgssHandler
     
     return 0 if file_list.empty?
 
-    exporter = @options[:unpack] ? Converter::JsonExporter.new(@version) : nil
-    restorer = @options[:pack] ? Converter::RubyObjectRestorer.new(@version) : nil
-
     file_list.each do |input_file|
-      if process_single_file(input_file, input_ext, output_ext, exporter, restorer)
+      if process_single_file(input_file, input_ext, output_ext)
         processed_count += 1
       end
     end
@@ -229,7 +226,7 @@ class RgssHandler
     raise if @options[:strict]
   end
 
-  def process_single_file(input_file, input_ext, output_ext, exporter, restorer)
+  def process_single_file(input_file, input_ext, output_ext)
     log_basename = File.basename(input_file)
     begin
       rel_path = Pathname.new(input_file).relative_path_from(@input_dir).to_s
@@ -244,13 +241,17 @@ class RgssHandler
         else
           Logging::Log.info "解包文件: #{log_basename}"
           input_obj = Converter::IO.load_marshal_data(input_file)
-          cleaned_data = exporter.export(input_obj)
-          Converter::IO.write_json_data(output_file, cleaned_data)
+          json_ready = case input_obj
+                       when Array then input_obj.map { |v| v.respond_to?(:as_json) ? v.as_json : v }
+                       when Hash then input_obj.transform_values { |v| v.respond_to?(:as_json) ? v.as_json : v }
+                       else input_obj.respond_to?(:as_json) ? input_obj.as_json : input_obj
+                       end
+          Converter::IO.write_json_data(output_file, json_ready)
         end
       else # pack
         Logging::Log.info "封包文件: #{log_basename}"
-        input_data = Converter::IO.load_json_data(input_file)
-        restored_obj = restorer.restore(input_data)
+        json_string = File.read(input_file, encoding: "UTF-8")
+        restored_obj = Oj.load(json_string, mode: :compat, create_additions: true)
         Converter::IO.write_marshal_data(output_file, restored_obj)
       end
       true
