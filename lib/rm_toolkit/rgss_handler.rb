@@ -159,6 +159,17 @@ class RgssHandler
     processed_count = 0
 
     if @options[:pack]
+      scripts_source_dir = File.join(@input_dir, SCRIPTS_BASENAME)
+      if Dir.exist?(scripts_source_dir)
+        if @options[:remove_script]
+          Converter::Scripts.remove_scripts(scripts_source_dir,
+                                             remove_index: @options[:remove_script])
+        end
+        if @options[:prune_empty_scripts]
+          Converter::Scripts.remove_scripts(scripts_source_dir,
+                                             prune_empty: true)
+        end
+      end
       pack_scripts(output_ext)
       scripts_source_path_prefix = File.join(@input_dir, SCRIPTS_BASENAME).downcase
       file_list.reject! { |f| f.downcase.start_with?(scripts_source_path_prefix) }

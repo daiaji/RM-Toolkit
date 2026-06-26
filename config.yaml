@@ -63,7 +63,7 @@ exclude_files:
 # --- 日志配置 ---
 logging:
   log_level: "WARN"
-  log_to_file: false
+  log_to_file: true
   log_directory: "logs"
   log_filename_format: "RM-Toolkit_{timestamp}.log"
   enable_colors: true

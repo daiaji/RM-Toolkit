@@ -147,6 +147,8 @@ class Application
       opts.separator ""
       opts.separator "其他选项:"
       opts.on("--strict", "启用严格模式，遇到第一个文件错误即中止") { @options[:strict] = true }
+      opts.on("--remove-script INDEX", Integer, "删除指定索引的脚本 (仅 --pack 时生效)") { |i| @options[:remove_script] = i }
+      opts.on("--prune-empty-scripts", "删除所有空脚本 (仅 --pack 时生效)") { @options[:prune_empty_scripts] = true }
       opts.on("-e", "--extract-archive FILE", "独立提取RGSSAD存档并退出") { |f| @options[:extract_archive_path] = f }
       opts.on("-o", "--extract-output-dir DIR", "独立提取的输出目录") { |d| @options[:extract_output_path] = d }
       opts.on("--rgss1", "强制使用 RGSS1 (XP)") { @options[:rgss_version] = "RGSS1" }
