@@ -12,8 +12,8 @@ Gem::Specification.new do |spec|
 
   spec.summary     = 'A tool to convert RPG Maker data files and decrypt assets.'
   spec.description = 'A comprehensive toolkit for converting RPG Maker data files (from XP, VX, VX Ace) to JSON, and for decrypting/extracting assets from RGSSAD, MV, and MZ game archives.'
-  spec.homepage    = 'https://github.com/your_username/RM-Toolkit' # <-- 请替换成您的项目主页
-  spec.license     = 'MIT'
+  spec.homepage    = 'https://github.com/daiaji/RM-Toolkit'
+  spec.license     = 'GPL-3.0'
 
   # 防止将不必要的文件打包进 gem。
   # 这个 glob 模式是正确的，它会包含 ext/rm_toolkit/native/ 下的所有文件。
