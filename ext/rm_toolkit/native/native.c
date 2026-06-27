@@ -9,8 +9,8 @@
 // --- Platform Specific Includes ---
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#include <wchar.h>
 #include <windows.h>
+#include <locale.h>
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -21,7 +21,7 @@
 #endif
 
 // --- SIMD Intrinsics Includes ---
-#if defined(__AVX512F__) || defined(__AVX2__)
+#if defined(__AVX2__)
 #include <immintrin.h>
 #endif
 
@@ -105,21 +105,8 @@ static void sys_fail_helper(const char *msg, const char *path) {
   rb_sys_fail(full_msg);
 }
 
-FILE *platform_fopen(const char *utf8_path, const char *mode) {
-#ifdef _WIN32
-  int required_size = MultiByteToWideChar(CP_UTF8, 0, utf8_path, -1, NULL, 0);
-  if (required_size <= 0) { errno = EILSEQ; return NULL; }
-  wchar_t *w_path = (wchar_t *)malloc(required_size * sizeof(wchar_t));
-  if (!w_path) { errno = ENOMEM; return NULL; }
-  if (!MultiByteToWideChar(CP_UTF8, 0, utf8_path, -1, w_path, required_size)) { free(w_path); errno = EILSEQ; return NULL; }
-  wchar_t w_mode[10] = {0};
-  mbstowcs(w_mode, mode, (sizeof(w_mode) / sizeof(wchar_t)) - 1);
-  FILE* file = _wfopen(w_path, w_mode);
-  free(w_path);
-  return file;
-#else
-  return fopen(utf8_path, mode);
-#endif
+FILE *platform_fopen(const char *path, const char *mode) {
+  return fopen(path, mode);
 }
 
 // ============================================================================
@@ -170,62 +157,6 @@ static unsigned int decrypt_file_data_scalar(unsigned char *data, size_t n, unsi
   }
   return key;
 }
-
-#if defined(__AVX512F__)
-#define VEC_SIZE_AVX512 16
-#define MOD_64_MASK 0x3F
-#if __STDC_VERSION__ >= 201112L
-_Alignas(64)
-#elif defined(__GNUC__) || defined(__clang__)
-__attribute__((aligned(64)))
-#endif
-static const unsigned int POWERS_OF_7_AVX512[VEC_SIZE_AVX512] = {
-    1U, 7U, 49U, 343U, 2401U, 16807U, 117649U, 823543U, 5764801U, 40353607U, 282475249U, 1977326743U, 956385313U, 2399729895U, 3913207377U, 1622647863U
-};
-_Static_assert(sizeof(POWERS_OF_7_AVX512) == sizeof(unsigned int) * VEC_SIZE_AVX512, "AVX512 powers table size mismatch");
-
-#if __STDC_VERSION__ >= 201112L
-_Alignas(64)
-#elif defined(__GNUC__) || defined(__clang__)
-__attribute__((aligned(64)))
-#endif
-static const unsigned int GEOMETRIC_SUMS_AVX512[VEC_SIZE_AVX512] = {
-    0U, 3U, 24U, 171U, 1200U, 8403U, 58824U, 411771U, 2882400U, 20176803U, 141237624U, 988663371U, 2625676304U, 1199864947U, 4104087336U, 2958807579U
-};
-_Static_assert(sizeof(GEOMETRIC_SUMS_AVX512) == sizeof(unsigned int) * VEC_SIZE_AVX512, "AVX512 geometric sums table size mismatch");
-
-// ** CORRECTED CONSTANTS **
-// These are the correct n=16 values calculated externally.
-#define POWER_OF_7_STEP_AVX512 2768600449U
-#define GEOMETRIC_SUM_STEP_AVX512 3531783872U
-
-__attribute__((target("avx512f")))
-static void decrypt_file_data_avx512_parallel(unsigned char* data, size_t n, unsigned int key) {
-    const __m512i v_powers = _mm512_load_si512((const __m512i*)POWERS_OF_7_AVX512);
-    const __m512i v_geometrics = _mm512_load_si512((const __m512i*)GEOMETRIC_SUMS_AVX512);
-    size_t offset = 0;
-    if (((uintptr_t)data & MOD_64_MASK) != 0) {
-        offset = 64 - ((uintptr_t)data & MOD_64_MASK);
-        if (offset > n) offset = n;
-        key = decrypt_file_data_scalar(data, offset, key); // Correctly update key
-    }
-    const size_t q = (n - offset) >> 6;
-    const int r = (n - offset) & MOD_64_MASK;
-    __m512i* data_p = (__m512i*)(data + offset);
-    for (size_t i = 0; i < q; ++i) {
-        __m512i v_key_base = _mm512_set1_epi32(key);
-        __m512i v_keys = _mm512_add_epi32(_mm512_mullo_epi32(v_key_base, v_powers), v_geometrics);
-        __m512i v_data = _mm512_load_si512(data_p);
-        v_data = _mm512_xor_si512(v_data, v_keys);
-        _mm512_store_si512(data_p, v_data);
-        data_p++;
-        key = key * POWER_OF_7_STEP_AVX512 + GEOMETRIC_SUM_STEP_AVX512;
-    }
-    if (r > 0) {
-        decrypt_file_data_scalar((unsigned char*)data_p, (size_t)r, key);
-    }
-}
-#endif
 
 #if defined(__AVX2__)
 #define VEC_SIZE_AVX2 8
@@ -827,6 +758,11 @@ VALUE native_decrypt_mv_mz(VALUE self, VALUE in_rb, VALUE out_rb, VALUE key_rb) 
 // --- Ruby Extension Initializer ---
 // ============================================================================
 void Init_native() {
+#ifdef _WIN32
+    setlocale(LC_ALL, ".utf-8");
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     RmToolkitNative_module = rb_define_module("RmToolkitNative");
     native_File_module = rb_const_get(rb_cObject, rb_intern("File"));
     native_FileUtils_module = rb_const_get(rb_cObject, rb_intern("FileUtils"));
@@ -839,12 +775,6 @@ void Init_native() {
 
     // --- SIMD Decryption Function Selection with Clear Logging ---
 #if (defined(__GNUC__) || defined(__clang__))
-    #if defined(__AVX512F__)
-        if (__builtin_cpu_supports("avx512f")) {
-            g_decrypt_func = decrypt_file_data_avx512_parallel;
-            printf("[RmToolkitNative] INFO: CPU supports AVX512F. Using AVX512-optimized decryption.\n");
-        } else
-    #endif
     #if defined(__AVX2__)
         if (__builtin_cpu_supports("avx2")) {
             g_decrypt_func = decrypt_file_data_avx2_parallel;
@@ -853,20 +783,17 @@ void Init_native() {
     #endif
     {
         g_decrypt_func = decrypt_file_data_scalar_wrapper;
-        printf("[RmToolkitNative] INFO: AVX2/AVX512F not supported by CPU. Using standard scalar decryption.\n");
+        printf("[RmToolkitNative] INFO: AVX2 not supported by CPU. Using standard scalar decryption.\n");
     }
 #else
     // Fallback for other compilers like MSVC, which rely on compile-time flags.
-    #if defined(__AVX512F__)
-        g_decrypt_func = decrypt_file_data_avx512_parallel;
-        printf("[RmToolkitNative] INFO: Compiled with AVX512F support. Using AVX512-optimized decryption.\n");
-    #elif defined(__AVX2__)
+    #if defined(__AVX2__)
         g_decrypt_func = decrypt_file_data_avx2_parallel;
         printf("[RmToolkitNative] INFO: Compiled with AVX2 support. Using AVX2-optimized decryption.\n");
     #else
         g_decrypt_func = decrypt_file_data_scalar_wrapper;
-        printf("[RmToolkitNative] INFO: Compiled without specific AVX support. Using standard scalar decryption.\n");
+        printf("[RmToolkitNative] INFO: Compiled without AVX2 support. Using standard scalar decryption.\n");
     #endif
 #endif
-    fflush(stdout); // Ensure the message is printed immediately.
+    fflush(stdout);
 }

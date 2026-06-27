@@ -7,7 +7,7 @@ RPG Maker 游戏数据文件转换工具。支持 RGSS1/2/3（`.rxdata` / `.rvda
 This project builds upon the work of several great open-source projects:
 
 - **[rgss-db-cli](https://github.com/SnowSzn/rgss-db-cli)** (GPL-3.0) — Ruby 实现的 RGSS 数据库导出/导入工具，提供了完整的 RGSS 类型定义和 JSON 转换参考
-- **[R3EXS](https://github.com/LuoTat/R3EXS)** (MIT) — RGSS3 字符串提取/注入工具，提供了**高速 RGSS3A 解密 C 扩展实现**（AVX2/AVX512 向量化，支持 Fux2Pack2 等多种加密格式）
+- **[R3EXS](https://github.com/LuoTat/R3EXS)** (MIT) — RGSS3 字符串提取/注入工具，提供了**高速 RGSS3A 解密 C 扩展实现参考**（AVX2 向量化）以及 **Scripts.rxdata/.rvdata2 解包/封包流程参考**
 - **[RPGMakerDecrypter](https://github.com/uuksu/RPGMakerDecrypter)** (MIT) — C# 实现的 RPG Maker 归档文件解密工具，提供了 RGSS1/2 归档解密以及 MV/MZ 媒体文件加解密的参考实现（翻译为 C 原生代码）
 
 ## License
