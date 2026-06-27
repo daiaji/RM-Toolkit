@@ -113,10 +113,11 @@ FILE *platform_fopen(const char *path, const char *mode) {
 // --- RGSSAD Decryption Logic --- (Unchanged)
 // ============================================================================
 #define MOD_4_MASK 0b11
-enum RGSSAD_TYPE { UNKNOWN_ARCHIVE, RGSSADv1, RGSSADv3 };
+enum RGSSAD_TYPE { UNKNOWN_ARCHIVE, RGSSADv1, RGSSADv3, FUX2PACK2 };
 #define RGSSADv1_INITIAL_KEY 0xDEADCAFE
 #define HEADER_SIZE 8
 #define V3_SEED_SIZE 4
+#define FUX2PACK2_HEADER_HINT_SIZE 8
 
 unsigned int decrypt_integer_v1(unsigned int encrypted_val, unsigned int *key) { unsigned int decrypted_val = encrypted_val ^ (*key); *key = (*key) * 7 + 3; return decrypted_val; }
 void decrypt_filename_v1(unsigned char *data, size_t n, unsigned int *key) { for (size_t i = 0; i < n; ++i) { data[i] ^= ((*key) & 0xFF); *key = (*key) * 7 + 3; } }
@@ -643,6 +644,12 @@ static VALUE rgssad_extraction_orchestrator(VALUE context_val) {
         memcpy(&seed, data_ptr, V3_SEED_SIZE);
         data_ptr += V3_SEED_SIZE;
         ctx->key_v3 = seed * 9 + 3;
+    } else if (memcmp(header_ptr, "Fux2Pack", FUX2PACK2_HEADER_HINT_SIZE) == 0) {
+        ctx->archive_type = FUX2PACK2;
+        data_ptr += FUX2PACK2_HEADER_HINT_SIZE;
+        if (ctx->file_size < FUX2PACK2_HEADER_HINT_SIZE + V3_SEED_SIZE) rb_raise(rm_toolkit_native_Error_class, "Truncated Fux2Pack2 archive: missing seed");
+        memcpy(&ctx->key_v3, data_ptr, V3_SEED_SIZE);
+        data_ptr += V3_SEED_SIZE;
     } else {
         rb_raise(rm_toolkit_native_Error_class, "Unknown or invalid archive header");
     }
