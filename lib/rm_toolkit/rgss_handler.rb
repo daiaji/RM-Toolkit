@@ -82,7 +82,11 @@ class RgssHandler
   private
 
   def validate_operation
-    raise "错误: 对于 RGSS1/2/3 项目，必须指定 --unpack 或 --pack 中的一个。" unless @options[:unpack] ^ @options[:pack]
+    has_script_op = any_of_script_ops?
+    has_mode = @options[:unpack] || @options[:pack]
+    unless has_mode || has_script_op
+      raise "错误: 对于 RGSS1/2/3 项目，必须指定 --unpack 或 --pack，或一个脚本操作。"
+    end
     if @options[:reconstruct] && @options[:pack]
       Logging::Log.warn "警告: --reconstruct 选项在 --pack 模式下无效，将被忽略。"
     end
@@ -96,7 +100,8 @@ class RgssHandler
     if @options[:unpack]
       @input_dir = File.expand_path(game_data_dir_name, @base_dir)
       @output_dir = File.expand_path(source_data_dir_name, @base_dir)
-    elsif @options[:pack]
+    else
+      # --pack 或独立脚本操作: 从 Source/ 读, 写到 Data/
       @input_dir = File.expand_path(source_data_dir_name, @base_dir)
       @output_dir = File.expand_path(game_data_dir_name, @base_dir)
     end
@@ -154,23 +159,71 @@ class RgssHandler
     @exclude_patterns = (@config["exclude_files"] || []).map { |p| Regexp.new(p, Regexp::IGNORECASE) }
   end
 
+  def apply_script_operations
+    scripts_source_dir = File.join(@input_dir, SCRIPTS_BASENAME)
+    return false unless Dir.exist?(scripts_source_dir)
+
+    any_op = false
+    Logging::Log.info "检测到脚本操作，自动应用到 Source/ 并更新 Data/Scripts.*" if any_of_script_ops?
+
+    if @options[:remove_script]
+      Converter::Scripts.remove_scripts(scripts_source_dir, remove_index: @options[:remove_script])
+      any_op = true
+    end
+    if @options[:prune_empty_scripts]
+      Converter::Scripts.remove_scripts(scripts_source_dir, prune_empty: true)
+      any_op = true
+    end
+    if @options[:script_create_index]
+      Converter::Scripts.create_script(scripts_source_dir, target_index: @options[:script_create_index])
+      any_op = true
+    end
+    if @options[:script_clear_index]
+      Converter::Scripts.clear_script(scripts_source_dir, target_index: @options[:script_clear_index])
+      any_op = true
+    end
+    if @options[:script_rename]
+      Converter::Scripts.rename_script(scripts_source_dir, target_index: @options[:script_rename][0], new_name: @options[:script_rename][1])
+      any_op = true
+    end
+    if @options[:script_move]
+      Converter::Scripts.move_script(scripts_source_dir, from_index: @options[:script_move][0], to_index: @options[:script_move][1])
+      any_op = true
+    end
+    @options[:inject_scripts].each do |index, source|
+      Converter::Scripts.inject_script(scripts_source_dir, source, target_index: index)
+      any_op = true
+    end
+    @options[:replace_scripts].each do |index, source|
+      Converter::Scripts.replace_script(scripts_source_dir, source, target_index: index)
+      any_op = true
+    end
+    any_op
+  end
+
+  def any_of_script_ops?
+    @options[:remove_script] || @options[:prune_empty_scripts] ||
+      @options[:script_create_index] || @options[:script_clear_index] ||
+      @options[:script_rename] || @options[:script_move] ||
+      !@options[:inject_scripts].empty? || !@options[:replace_scripts].empty?
+  end
+
   def process_files
     file_list, input_ext, output_ext = get_file_list
     processed_count = 0
 
+    # 脚本操作: 无论 --pack/--unpack，只要 Source/scripts/ 存在就自动应用到 Data/
+    scripts_modified = apply_script_operations
+    if scripts_modified || @options[:pack]
+      pack_scripts(@options[:unpack] ? @source_ext : @rvdata_ext)
+    end
+
+    if @options[:scripts_only]
+      Logging::Log.info "仅处理脚本，跳过其他数据文件"
+      return processed_count
+    end
+
     if @options[:pack]
-      scripts_source_dir = File.join(@input_dir, SCRIPTS_BASENAME)
-      if Dir.exist?(scripts_source_dir)
-        if @options[:remove_script]
-          Converter::Scripts.remove_scripts(scripts_source_dir,
-                                             remove_index: @options[:remove_script])
-        end
-        if @options[:prune_empty_scripts]
-          Converter::Scripts.remove_scripts(scripts_source_dir,
-                                             prune_empty: true)
-        end
-      end
-      pack_scripts(output_ext)
       scripts_source_path_prefix = File.join(@input_dir, SCRIPTS_BASENAME).downcase
       file_list.reject! { |f| f.downcase.start_with?(scripts_source_path_prefix) }
     end
@@ -188,10 +241,10 @@ class RgssHandler
   
   def get_file_list
     ext_map = {"RGSS1" => ".rxdata", "RGSS2" => ".rvdata", "RGSS3" => ".rvdata2"}
-    rvdata_ext = ext_map[@version]
-    source_ext = ".json"
-    input_ext = @options[:unpack] ? rvdata_ext : source_ext
-    output_ext = @options[:unpack] ? source_ext : rvdata_ext
+    @rvdata_ext = ext_map[@version]
+    @source_ext = ".json"
+    input_ext = @options[:unpack] ? @rvdata_ext : @source_ext
+    output_ext = @options[:unpack] ? @source_ext : @rvdata_ext
 
     return [], input_ext, output_ext unless Dir.exist?(@input_dir)
 

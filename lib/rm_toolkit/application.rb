@@ -39,6 +39,16 @@ class Application
       unpack: false, pack: false, overwrite: false, reconstruct: false, strict: false,
       rgss_version: nil, extract_archive_path: nil, extract_output_path: nil,
       include_dirs: [],
+      # --- 脚本操作选项 (格式: 索引:参数) ---
+      list_scripts: false,          # 列出脚本
+      script_create_index: nil,     # 创建空脚本的目标索引
+      script_clear_index: nil,      # 清空脚本的目标索引
+      script_rename: nil,           # 重命名: [索引, 新名称]
+      script_export: nil,           # 导出: [索引, 输出路径]
+      script_move: nil,             # 移动: [源索引, 目标索引]
+      scripts_only: false,          # 仅处理脚本，不碰其他数据文件
+      inject_scripts: [],           # 注入列表: [[索引, 路径], ...]
+      replace_scripts: [],           # 替换列表: [[索引, 路径], ...]
       # --- 快照相关选项 ---
       snapshot_task: nil,       # :create, :list, :restore
       snapshot_name: nil,       # 用于 create 和 restore 的名称
@@ -94,9 +104,21 @@ class Application
   end
   
   def handle_regular_processing
-    # 确定操作模式是否有效
-    unless @options[:unpack] || @options[:pack]
-      raise "错误: 必须指定一个主要操作模式，例如 --unpack, --pack, 或一个快照命令。"
+    # 独立运行的操作 (无需 unpack/pack)
+    if @options[:list_scripts]
+      handle_list_scripts; return
+    end
+    if @options[:script_export]
+      handle_export_script; return
+    end
+    
+    # 确定操作模式是否有效（脚本操作可独立运行）
+    has_script_op = @options[:script_create_index] || @options[:script_clear_index] ||
+                    @options[:script_rename] || @options[:script_move] ||
+                    !@options[:inject_scripts].empty? || !@options[:replace_scripts].empty? ||
+                    @options[:remove_script] || @options[:prune_empty_scripts]
+    unless @options[:unpack] || @options[:pack] || has_script_op
+      raise "错误: 必须指定一个主要操作模式，例如 --unpack, --pack, 或一个脚本操作命令。"
     end
     
     detected_version = VersionDetector.detect(@base_dir)
@@ -115,6 +137,72 @@ class Application
     
     handler = handler_class.new(@options, @config, final_version)
     handler.process
+  end
+
+  def handle_list_scripts
+    require 'zlib'
+    
+    ext_map = {"RGSS1" => ".rxdata", "RGSS2" => ".rvdata", "RGSS3" => ".rvdata2"}
+    detected = VersionDetector.detect(@base_dir)
+    version = @options[:rgss_version] || detected || @config["rgss_version"]
+    ext = ext_map[version]
+    
+    scripts_path = File.join(@base_dir, "Data", "Scripts#{ext}")
+    unless File.exist?(scripts_path)
+      Logging::Log.warn "未找到脚本文件: #{scripts_path}"
+      return
+    end
+    
+    scripts = Marshal.load(File.binread(scripts_path))
+    
+    Logging::Log.info "===== 脚本列表 (#{scripts.size} 个) ====="
+    scripts.each_with_index do |entry, idx|
+      name = entry[1].dup.force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+      Logging::Log.info "  [#{format('%03d', idx)}] #{name}"
+    end
+    Logging::Log.info "================================"
+  rescue => e
+    Logging::Log.error "列出脚本失败: #{e.message}"
+  end
+
+  def handle_export_script
+    require 'zlib'
+
+    index, output_path = @options[:script_export]
+
+    ext_map = {"RGSS1" => ".rxdata", "RGSS2" => ".rvdata", "RGSS3" => ".rvdata2"}
+    detected = VersionDetector.detect(@base_dir)
+    version = @options[:rgss_version] || detected || @config["rgss_version"]
+    ext = ext_map[version]
+
+    scripts_path = File.join(@base_dir, "Data", "Scripts#{ext}")
+    unless File.exist?(scripts_path)
+      Logging::Log.error "未找到脚本文件: #{scripts_path}"
+      return
+    end
+
+    scripts = Marshal.load(File.binread(scripts_path))
+
+    if index < 0 || index >= scripts.size
+      Logging::Log.error "索引 #{index} 超出范围 (0-#{scripts.size - 1})"
+      return
+    end
+
+    entry = scripts[index]
+    code = Zlib::Inflate.inflate(entry[2])
+    name = entry[1].dup.force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+
+    # 默认输出路径: 当前目录下的 index_name.rb
+    unless output_path
+      safe_name = name.gsub(/[^\w\u4e00-\u9fff]+/, '_').gsub(/_+/, '_').sub(/^_|_$/, '')
+      safe_name = "script" if safe_name.empty?
+      output_path = File.expand_path("#{format('%03d', index)}_#{safe_name}.rb")
+    end
+
+    File.binwrite(output_path, code)
+    Logging::Log.info "导出脚本 [#{format('%03d', index)}] #{name} -> #{output_path} (#{code.size} 字节)"
+  rescue => e
+    Logging::Log.error "导出脚本失败: #{e.message}"
   end
   
   def parse_options
@@ -145,10 +233,49 @@ class Application
       opts.on("-f", "--force", "在恢复快照时跳过确认提示 (请谨慎使用)") { @options[:force_restore] = true }
 
       opts.separator ""
-      opts.separator "其他选项:"
-      opts.on("--strict", "启用严格模式，遇到第一个文件错误即中止") { @options[:strict] = true }
-      opts.on("--remove-script INDEX", Integer, "删除指定索引的脚本 (仅 --pack 时生效)") { |i| @options[:remove_script] = i }
-      opts.on("--prune-empty-scripts", "删除所有空脚本 (仅 --pack 时生效)") { @options[:prune_empty_scripts] = true }
+      opts.separator "脚本管理 (统一格式: 索引:参数):"
+      opts.on("--list-scripts", "列出所有脚本的序号和名称 (独立运行)") { @options[:list_scripts] = true }
+      opts.on("--create-script INDEX", Integer, "在指定序号创建空脚本，原序号后移 (仅 --pack)") { |i| @options[:script_create_index] = i }
+      opts.on("--clear-script INDEX", Integer, "清空指定序号的脚本内容，保留位置和名称 (仅 --pack)") { |i| @options[:script_clear_index] = i }
+      opts.on("--remove-script INDEX", Integer, "删除指定序号的脚本，后续前移 (仅 --pack)") { |i| @options[:remove_script] = i }
+      opts.on("--prune-empty-scripts", "删除所有空脚本 (仅 --pack)") { @options[:prune_empty_scripts] = true }
+      opts.on("--rename-script SPEC", String, "重命名脚本 (格式: 索引:新名称，仅 --pack)") do |spec|
+        if spec =~ /\A(\d+):(.+)\z/
+          @options[:script_rename] = [$1.to_i, $2]
+        else
+          raise OptionParser::InvalidArgument, "--rename-script 格式为 索引:新名称"
+        end
+      end
+      opts.on("--move-script SPEC", String, "移动脚本位置 (格式: 源索引:目标索引，仅 --pack)") do |spec|
+        if spec =~ /\A(\d+):(\d+)\z/
+          @options[:script_move] = [$1.to_i, $2.to_i]
+        else
+          raise OptionParser::InvalidArgument, "--move-script 格式为 源索引:目标索引"
+        end
+      end
+      opts.on("--scripts-only", "仅打包脚本，不处理其他数据文件") { @options[:scripts_only] = true }
+      opts.on("--repack-scripts", "重新打包脚本（Source/scripts/ → Data/Scripts.*），等效于 --pack --scripts-only") { @options[:pack] = true; @options[:scripts_only] = true }
+      opts.on("--inject-script SPEC", String, "注入脚本文件到指定序号，原序号后移 (可多次使用，格式: 索引:文件路径)") do |spec|
+        if spec =~ /\A(\d+):(.+)\z/
+          @options[:inject_scripts] << [$1.to_i, $2]
+        else
+          raise OptionParser::InvalidArgument, "--inject-script 格式为 索引:文件路径"
+        end
+      end
+      opts.on("--replace-script SPEC", String, "替换指定序号的脚本内容 (可多次使用，格式: 索引:文件路径)") do |spec|
+        if spec =~ /\A(\d+):(.+)\z/
+          @options[:replace_scripts] << [$1.to_i, $2]
+        else
+          raise OptionParser::InvalidArgument, "--replace-script 格式为 索引:文件路径"
+        end
+      end
+      opts.on("--export-script SPEC", String, "导出脚本到文件 (格式: 索引[:输出路径])") do |spec|
+        if spec =~ /\A(\d+):(.+)\z/
+          @options[:script_export] = [$1.to_i, $2]
+        else
+          @options[:script_export] = [spec.to_i, nil]
+        end
+      end
       opts.on("-e", "--extract-archive FILE", "独立提取RGSSAD存档并退出") { |f| @options[:extract_archive_path] = f }
       opts.on("-o", "--extract-output-dir DIR", "独立提取的输出目录") { |d| @options[:extract_output_path] = d }
       opts.on("--rgss1", "强制使用 RGSS1 (XP)") { @options[:rgss_version] = "RGSS1" }

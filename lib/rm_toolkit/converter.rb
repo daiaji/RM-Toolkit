@@ -443,5 +443,222 @@ module Scripts
       File.write(metadata_filepath, Oj.dump(metadata, mode: :compat, indent: 2))
       Logging::Log.info "元数据已更新，剩余 #{metadata.size} 个脚本"
     end
+
+    # 解析 require_relative 依赖，将被引用的文件内容内联到主文件中
+    # 用于在 RGSS 脚本打包时处理 require_relative，因为游戏运行时没有文件系统路径
+    # @param source_file [String] 主 .rb 文件路径
+    # @return [String] 内联后的完整脚本代码
+    def self.resolve_require_relative(source_file)
+      dir = File.dirname(File.expand_path(source_file))
+      code = File.read(source_file, encoding: "UTF-8")
+
+      code.gsub(/^require_relative\s+['"](.+?)['"]$/) do
+        dep_relative = $1
+        dep_path = File.join(dir, "#{dep_relative}.rb")
+        unless File.exist?(dep_path)
+          Logging::Log.warn "注入脚本依赖解析: 依赖文件未找到 '#{dep_path}'，跳过"
+          next "#  MISSING DEPENDENCY: #{dep_relative}"
+        end
+        Logging::Log.info "注入脚本依赖解析: 内联 '#{dep_relative}.rb'"
+        dep_code = File.read(dep_path, encoding: "UTF-8")
+        dep_code
+      end
+    end
+
+    # 注入脚本到指定索引位置
+    # 将外部 .rb 文件注入为游戏脚本列表中的一项，原索引及之后的脚本自动后移
+    # @param scripts_input_dir [String] 脚本目录 (包含 .rb 文件和 Scripts_info.json)
+    # @param source_file [String] 要注入的 .rb 文件路径
+    # @param target_index [Integer] 目标索引 (默认 0)
+    def self.inject_script(scripts_input_dir, source_file, target_index: 0)
+      metadata = load_metadata(scripts_input_dir)
+
+      # 解析 require_relative 依赖
+      resolved_code = resolve_require_relative(source_file)
+      source_basename = File.basename(source_file, ".rb")
+
+      # 生成唯一 ID
+      max_id = metadata.map { |m| m["id"] }.max || 0
+      new_id = max_id + 1
+
+      # 校验目标索引
+      max_existing = metadata.map { |m| m["index"] }.max || 0
+      target_index = 0 if target_index < 0
+      if target_index > max_existing + 1
+        Logging::Log.warn "注入脚本: 索引 #{target_index} 超出范围，调整为 #{max_existing + 1}"
+        target_index = max_existing + 1
+      end
+
+      Logging::Log.info "注入脚本: '#{source_basename}' -> 索引 #{target_index} (ID: #{new_id})"
+
+      # 后移目标索引及之后的脚本
+      metadata.each { |m| m["index"] += 1 if m["index"] >= target_index }
+
+      # 插入新条目
+      metadata << { "id" => new_id, "name" => source_basename, "index" => target_index }
+      metadata.sort_by! { |m| m["index"] }
+
+      # 物理重命名文件 (从高到低，避免冲突)
+      existing_files = Dir.glob(File.join(scripts_input_dir, "*.rb"))
+                          .select { |f| File.basename(f, ".rb") =~ /\A\d+\z/ }
+                          .map { |f| [File.basename(f, ".rb").to_i, f] }
+                          .sort_by { |i, _| -i }
+
+      existing_files.each do |old_idx, old_path|
+        if old_idx >= target_index
+          new_path = File.join(scripts_input_dir, format("%03d.rb", old_idx + 1))
+          FileUtils.mv(old_path, new_path)
+          Logging::Log.debug "  重命名: #{format('%03d.rb', old_idx)} -> #{format('%03d.rb', old_idx + 1)}"
+        end
+      end
+
+      # 写入新脚本文件
+      new_script_path = File.join(scripts_input_dir, format("%03d.rb", target_index))
+      File.binwrite(new_script_path, resolved_code)
+      Logging::Log.info "  写入: #{format('%03d.rb', target_index)} (#{resolved_code.size} 字节)"
+
+      save_metadata(scripts_input_dir, metadata)
+    end
+    # 替换指定索引的脚本内容
+    # 保留原脚本的 ID 和名称，仅更新代码内容
+    # @param scripts_input_dir [String] 脚本目录 (包含 .rb 文件和 Scripts_info.json)
+    # @param source_file [String] 要替换的 .rb 文件路径
+    # @param target_index [Integer] 目标索引
+    def self.replace_script(scripts_input_dir, source_file, target_index:)
+      metadata = load_metadata(scripts_input_dir)
+      entry = metadata.find { |m| m["index"] == target_index }
+      raise "未找到索引 #{target_index} 的脚本" unless entry
+
+      resolved_code = resolve_require_relative(source_file)
+      source_basename = File.basename(source_file, ".rb")
+
+      Logging::Log.info "替换脚本: 索引 #{target_index} (ID: #{entry["id"]}, 原名: '#{entry["name"]}') <- '#{source_basename}'"
+      entry["name"] = source_basename
+
+      script_path = File.join(scripts_input_dir, format("%03d.rb", target_index))
+      File.binwrite(script_path, resolved_code)
+      Logging::Log.info "  写入: #{format('%03d.rb', target_index)} (#{resolved_code.size} 字节)"
+      save_metadata(scripts_input_dir, metadata)
+    end
+
+    # 在指定序号创建空脚本，原序号及之后后移
+    # @param scripts_input_dir [String] 脚本目录
+    # @param target_index [Integer] 目标索引
+    def self.create_script(scripts_input_dir, target_index:)
+      metadata = load_metadata(scripts_input_dir)
+
+      max_id = metadata.map { |m| m["id"] }.max || 0
+      max_existing = metadata.map { |m| m["index"] }.max || 0
+      target_index = 0 if target_index < 0
+      target_index = max_existing + 1 if target_index > max_existing + 1
+
+      Logging::Log.info "创建空脚本: 索引 #{target_index} (ID: #{max_id + 1})"
+
+      metadata.each { |m| m["index"] += 1 if m["index"] >= target_index }
+      metadata << { "id" => max_id + 1, "name" => "", "index" => target_index }
+      metadata.sort_by! { |m| m["index"] }
+
+      # 重命名文件 (从高到低)
+      Dir.glob(File.join(scripts_input_dir, "*.rb"))
+         .select { |f| File.basename(f, ".rb") =~ /\A\d+\z/ }
+         .map { |f| [File.basename(f, ".rb").to_i, f] }
+         .sort_by { |i, _| -i }
+         .each do |old_idx, old_path|
+        if old_idx >= target_index
+          FileUtils.mv(old_path, File.join(scripts_input_dir, format("%03d.rb", old_idx + 1)))
+        end
+      end
+
+      # 写入空文件
+      File.binwrite(File.join(scripts_input_dir, format("%03d.rb", target_index)), "")
+      save_metadata(scripts_input_dir, metadata)
+    end
+
+    # 清空指定序号的脚本内容，保留位置和名称
+    def self.clear_script(scripts_input_dir, target_index:)
+      metadata = load_metadata(scripts_input_dir)
+      entry = metadata.find { |m| m["index"] == target_index }
+      raise "未找到索引 #{target_index} 的脚本" unless entry
+
+      Logging::Log.info "清空脚本: 索引 #{target_index} '#{entry["name"]}'"
+      File.binwrite(File.join(scripts_input_dir, format("%03d.rb", target_index)), "")
+      save_metadata(scripts_input_dir, metadata)
+    end
+
+    # 重命名脚本
+    def self.rename_script(scripts_input_dir, target_index:, new_name:)
+      metadata = load_metadata(scripts_input_dir)
+      entry = metadata.find { |m| m["index"] == target_index }
+      raise "未找到索引 #{target_index} 的脚本" unless entry
+
+      old_name = entry["name"]
+      entry["name"] = new_name
+      Logging::Log.info "重命名脚本: [#{format('%03d', target_index)}] '#{old_name}' -> '#{new_name}'"
+      save_metadata(scripts_input_dir, metadata)
+    end
+
+    # 移动脚本位置
+    def self.move_script(scripts_input_dir, from_index:, to_index:)
+      metadata = load_metadata(scripts_input_dir)
+      entry = metadata.find { |m| m["index"] == from_index }
+      raise "未找到索引 #{from_index} 的脚本" unless entry
+      raise "源索引和目标索引相同" if from_index == to_index
+
+      max_existing = metadata.map { |m| m["index"] }.max || 0
+      to_index = 0 if to_index < 0
+      to_index = max_existing if to_index > max_existing
+
+      Logging::Log.info "移动脚本: [#{format('%03d', from_index)}] -> [#{format('%03d', to_index)}] '#{entry["name"]}'"
+
+      # 先删除源
+      metadata.reject! { |m| m["index"] == from_index }
+      src_path = File.join(scripts_input_dir, format("%03d.rb", from_index))
+      src_code = File.exist?(src_path) ? File.binread(src_path) : ""
+
+      # 后移目标及之后的脚本
+      shift = from_index < to_index ? -1 : 1
+      range = if from_index < to_index
+                (from_index + 1..to_index)
+              else
+                (to_index...from_index)
+              end
+      metadata.each { |m| m["index"] += shift if range.include?(m["index"]) }
+
+      entry["index"] = to_index
+      metadata << entry
+      metadata.sort_by! { |m| m["index"] }
+
+      # 物理重命名
+      FileUtils.rm_f(src_path)
+      Dir.glob(File.join(scripts_input_dir, "*.rb"))
+         .select { |f| File.basename(f, ".rb") =~ /\A\d+\z/ }
+         .map { |f| [File.basename(f, ".rb").to_i, f] }
+         .select { |i, _| range.include?(i) }
+         .sort_by { |i, _| from_index < to_index ? i : -i }
+         .each do |old_idx, old_path|
+        new_idx = old_idx + shift
+        FileUtils.mv(old_path, File.join(scripts_input_dir, format("%03d.rb", new_idx)))
+      end
+
+      File.binwrite(File.join(scripts_input_dir, format("%03d.rb", to_index)), src_code)
+      save_metadata(scripts_input_dir, metadata)
+    end
+
+    # --- 内部辅助 ---
+
+    def self.load_metadata(scripts_input_dir)
+      path = File.join(scripts_input_dir, METADATA_FILENAME)
+      raise IOError, "元数据文件未找到: #{path}" unless File.exist?(path)
+      Oj.load(File.read(path, encoding: "UTF-8"), mode: :compat, symbol_keys: false).tap do |m|
+        raise TypeError, "元数据不是数组" unless m.is_a?(Array)
+      end
+    end
+
+    def self.save_metadata(scripts_input_dir, metadata)
+      path = File.join(scripts_input_dir, METADATA_FILENAME)
+      metadata.sort_by! { |m| m["index"] }
+      File.write(path, Oj.dump(metadata, mode: :compat, indent: 2))
+      Logging::Log.info "元数据已更新，当前 #{metadata.size} 个脚本"
+    end
   end # module Scripts
 end # module Converter
