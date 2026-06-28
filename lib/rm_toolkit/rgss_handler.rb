@@ -42,8 +42,8 @@ class RgssHandler
       end
       
       ini_path = File.join(base_dir, config[:ini_file])
-      if File.exist?(ini_path) && !overwrite
-        Logging::Log.warn "配置文件 #{config[:ini_file]} 已存在于基准目录，跳过生成。使用 --overwrite 选项进行覆盖。"
+      if File.exist?(ini_path)
+        Logging::Log.info "配置文件 #{config[:ini_file]} 已存在，保留原配置。"
       else
         File.write(ini_path, config[:ini_content])
         Logging::Log.info "成功在基准目录创建配置文件: #{ini_path}"
@@ -252,6 +252,16 @@ class RgssHandler
         Logging::Log.info "封包文件: #{log_basename}"
         json_string = File.read(input_file, encoding: "UTF-8")
         restored_obj = Oj.load(json_string, mode: :compat, create_additions: true)
+
+        basename_no_ext = File.basename(input_file, ".*")
+        if basename_no_ext.match?(/\AMap\d{3}\z/i) && restored_obj.is_a?(RPG::Map)
+          restored_obj.events.transform_keys! { |key| key.to_s.to_i } if restored_obj.events
+        elsif %w[actors animations armors classes commonevents enemies items skills states tilesets troops weapons].include?(basename_no_ext.downcase)
+          restored_obj.unshift(nil) if restored_obj.is_a?(Array) && !restored_obj.first.nil?
+        elsif restored_obj.is_a?(Hash)
+          restored_obj.transform_keys! { |key| key.to_s.to_i }
+        end
+
         Converter::IO.write_marshal_data(output_file, restored_obj)
       end
       true

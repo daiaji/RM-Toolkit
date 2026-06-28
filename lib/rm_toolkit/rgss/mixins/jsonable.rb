@@ -1,3 +1,5 @@
+require 'set'
+
 module RgssDb
   module Jsonable
     def as_json
@@ -32,12 +34,24 @@ module RgssDb
     def json_leaf(value)
       case value
       when Array
-        value.map { |v| v.respond_to?(:as_json) ? v.as_json : v }
+        value.map { |v| json_leaf_tracked(v) }
       when ->(v) { v.respond_to?(:as_json) }
-        value.as_json
+        json_leaf_tracked(value)
       else
         value
       end
+    end
+
+    def json_leaf_tracked(value)
+      visited = (Thread.current[:jsonable_visited] ||= Set.new)
+      return value unless value.respond_to?(:object_id)
+      return value if value.is_a?(Numeric) || value.is_a?(Symbol) || value.is_a?(TrueClass) || value.is_a?(FalseClass)
+      oid = value.object_id
+      return nil if visited.include?(oid)
+      visited.add(oid)
+      result = value.respond_to?(:as_json) ? value.as_json : value
+      visited.delete(oid)
+      result
     end
   end
 end
