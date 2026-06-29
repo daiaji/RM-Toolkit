@@ -64,6 +64,13 @@ module Logging
     end
     # --- 便捷方法定义结束 ---
 
+    # 输出命令结果到 stdout（不受日志级别过滤）
+    # 同时写入文件日志（如果启用）用于审计追溯
+    def self.result(message)
+      $stdout.puts(message)
+      Logging.instance_variable_get(:@file_logger)&.info(message)
+    end
+
     # 获取当前生效的日志级别 (整数形式)
     def self.level
       Logging.instance_variable_get(:@log_level_int)

@@ -158,7 +158,7 @@ class Application
     Logging::Log.info "===== 脚本列表 (#{scripts.size} 个) ====="
     scripts.each_with_index do |entry, idx|
       name = entry[1].dup.force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
-      $stdout.puts "#{format('%03d', idx)}|#{name}"
+      Logging::Log.result("#{format('%03d', idx)}|#{name}")
     end
     Logging::Log.info "================================"
   rescue => e
@@ -200,7 +200,7 @@ class Application
     end
 
     File.binwrite(output_path, code)
-    Logging::Log.info "导出脚本 [#{format('%03d', index)}] #{name} -> #{output_path} (#{code.size} 字节)"
+    Logging::Log.result("#{format('%03d', index)}|#{name}|#{output_path}|#{code.size}")
   rescue => e
     Logging::Log.error "导出脚本失败: #{e.message}"
   end
